@@ -280,22 +280,10 @@ class SyncService {
     });
   }
 
-  // Sunucuya ve Buluta tam veritabanı yolla (PC veya iPhone'dan)
+  // Sunucuya tam veritabanı yolla (PC veya iPhone'dan)
   async pushFullSync(data: any): Promise<boolean> {
     try {
-      // 1. Buluta yayınla
-      fetch('https://ntfy.sh', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          topic: CLOUD_SYNC_TOPIC,
-          title: '🔄 VERİTABANI SENKRONİZASYONU',
-          message: JSON.stringify({ type: 'FULL_SYNC', data }),
-          priority: 2
-        })
-      }).catch(() => {});
-
-      // 2. Yerel sunucuya kaydet
+      // Yerel sunucuya kaydet (Bulut bildirim servisine tüm veritabanı basılmaz, sadece gerçek bildirimler gider)
       if (this.serverUrl || window.location.hostname === 'localhost') {
         const res = await fetch(`${this.serverUrl}/api/sync`, {
           method: 'POST',
@@ -369,13 +357,26 @@ class SyncService {
   // Ustalara Canlı Bildirim, Ses ve Kilit Ekranı Uyarısı Fırlatma
   async sendTechnicianAlert(ticket: ServiceTicket, message?: string): Promise<boolean> {
     try {
-      // 1. İnsan Gözünün Okuyacağı Pırıl Pırıl Türkçe Bildirim Metni (Garip JSON kodları kalktı!)
+      const deviceLabels: Record<string, string> = {
+        washing_machine: 'Çamaşır Makinesi',
+        dishwasher: 'Bulaşık Makinesi',
+        refrigerator: 'Buzdolabı',
+        oven: 'Fırın / Ocak',
+        dryer: 'Kurutma Makinesi',
+        boiler: 'Kombi',
+        air_conditioner: 'Klima',
+        other: 'Cihaz'
+      };
+      const devName = deviceLabels[ticket.deviceType] || ticket.deviceType || 'Cihaz';
+      const devDetail = [devName, ticket.brand, (ticket.model && ticket.model !== 'Model Belirtilmedi') ? ticket.model : ''].filter(Boolean).join(' ');
+
+      // 1. İnsan Gözünün Okuyacağı Pırıl Pırıl Türkçe Bildirim Metni (Garip JSON kodları tamamen temizlendi!)
       const readableLines = [
         `👤 Müşteri: ${ticket.customerName}`,
-        `🔧 Cihaz: ${ticket.brand} ${ticket.model && ticket.model !== 'Model Belirtilmedi' ? ticket.model : ''}`.trim(),
+        `🔧 Cihaz: ${devDetail}`,
         `⚠️ Arıza: ${ticket.reportedFault}`,
         `📍 Adres: ${ticket.customerAddress}`,
-        `📞 Tel: ${ticket.customerPhone}`
+        ticket.customerPhone ? `📞 Tel: ${ticket.customerPhone}` : ''
       ];
       const humanReadableText = readableLines.filter(Boolean).join('\n');
 
