@@ -259,7 +259,7 @@ class SyncService {
       } catch (e) {
         // Çevrimdışı sessiz geç
       }
-    }, 2500);
+    }, 30000);
   }
 
   // Dinleyici Ekle (App.tsx veya bileşenler dinler)
