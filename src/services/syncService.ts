@@ -28,12 +28,34 @@ class SyncService {
 
   private pollingInterval: any = null;
   private knownTicketIds: Set<string> = new Set();
+  private hasSetupVisibilityListener: boolean = false;
 
   // Canlı Bulut ve Yerel Bağlantıları Başlat
   connect() {
     this.startSmartPolling();
+    this.connectCloudSSE();
+    this.connectLocalSSE();
+    this.checkMissedCloudMessages();
 
-    // 1. GLOBAL BULUT SSE BAĞLANTISI (Vercel & iPhone için 7/24 Kesintisiz)
+    // iOS Safari ekran kilidi açıldığında veya kullanıcı uygulamaya döndüğünde
+    // SAYFAYI YENİLEMEDEN ANINDA TÜM BEKLEYEN İŞLERİ YAKALA!
+    if (!this.hasSetupVisibilityListener && typeof document !== 'undefined') {
+      this.hasSetupVisibilityListener = true;
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+          console.log('📱 Telefon ekranı açıldı / uygulama ön plana geldi. Bekleyen işler anında taranıyor...');
+          this.checkMissedCloudMessages();
+          this.reconnectCloudSSE();
+        }
+      });
+      window.addEventListener('focus', () => {
+        this.checkMissedCloudMessages();
+      });
+    }
+  }
+
+  // Bulut SSE Bağlantısı
+  private connectCloudSSE() {
     if (!this.cloudEventSource && typeof EventSource !== 'undefined') {
       try {
         this.cloudEventSource = new EventSource(`${CLOUD_NTFY_URL}/sse`);
@@ -80,8 +102,20 @@ class SyncService {
         console.warn('Bulut senkronizasyon başlatılamadı:', err);
       }
     }
+  }
 
-    // 2. YEREL SUNUCU SSE BAĞLANTISI (Masaüstü PC & Yerel Ağ)
+  public reconnectCloudSSE() {
+    if (this.cloudEventSource) {
+      try {
+        this.cloudEventSource.close();
+      } catch {}
+      this.cloudEventSource = null;
+    }
+    this.connectCloudSSE();
+  }
+
+  // Yerel Sunucu SSE Bağlantısı (Masaüstü PC & Yerel Ağ)
+  private connectLocalSSE() {
     if (!this.localEventSource && typeof EventSource !== 'undefined' && (this.serverUrl || window.location.hostname === 'localhost')) {
       try {
         const localUrl = this.serverUrl || '';
@@ -115,51 +149,56 @@ class SyncService {
     }
   }
 
+  // Buluttaki bekleyen tüm yeni mesajları ve işleri sorgula (Ekran açıldığında ve periyodik)
+  public async checkMissedCloudMessages() {
+    try {
+      const pollRes = await fetch(`${CLOUD_NTFY_URL}/json?poll=1&since=${this.lastPollTimestamp}`);
+      if (pollRes.ok) {
+        const text = await pollRes.text();
+        const lines = text.split('\n').filter(Boolean);
+        for (const line of lines) {
+          try {
+            const item = JSON.parse(line);
+            if (item.time && item.time > this.lastPollTimestamp) {
+              this.lastPollTimestamp = item.time;
+            }
+            if (item.message) {
+              let inner: any = null;
+              try {
+                inner = JSON.parse(item.message);
+              } catch {
+                inner = item.message;
+              }
+              if (inner && inner.type) {
+                // Kendi gönderdiğimiz bildirimi kendimizde çalmayalım
+                if (inner.senderId && inner.senderId === this.clientId) {
+                  continue;
+                }
+                if (inner.type === 'NEW_TICKET_ALERT') {
+                  const ticketId = inner.data?.ticket?.id || inner.data?.id;
+                  if (ticketId && !this.knownTicketIds.has(ticketId)) {
+                    this.knownTicketIds.add(ticketId);
+                    console.log('🚨 Buluttan yeni iş emri alındı:', ticketId);
+                    this.notifyListeners(inner);
+                  }
+                } else if (inner.type === 'TICKET_UPDATED') {
+                  this.notifyListeners(inner);
+                }
+              }
+            }
+          } catch {}
+        }
+      }
+    } catch (e) {}
+  }
+
   // iPhone için Akıllı Arka Plan Sorgulama (SSE kesilirse veya uyursa bile yeni işi kaçırmaz)
   private startSmartPolling() {
     if (this.pollingInterval) return;
 
     this.pollingInterval = setInterval(async () => {
-      // A) BULUT MESAJ HAVUZUNU KONTROL ET (iPhone ve Vercel İçin 100% Kesintisiz Garanti)
-      try {
-        const pollRes = await fetch(`${CLOUD_NTFY_URL}/json?poll=1&since=${this.lastPollTimestamp}`);
-        if (pollRes.ok) {
-          const text = await pollRes.text();
-          const lines = text.split('\n').filter(Boolean);
-          for (const line of lines) {
-            try {
-              const item = JSON.parse(line);
-              if (item.time && item.time > this.lastPollTimestamp) {
-                this.lastPollTimestamp = item.time;
-              }
-              if (item.message) {
-                let inner: any = null;
-                try {
-                  inner = JSON.parse(item.message);
-                } catch {
-                  inner = item.message;
-                }
-                if (inner && inner.type) {
-                  // Kendi gönderdiğimiz bildirimi kendimizde çalmayalım
-                  if (inner.senderId && inner.senderId === this.clientId) {
-                    continue;
-                  }
-                  if (inner.type === 'NEW_TICKET_ALERT') {
-                    const ticketId = inner.data?.ticket?.id || inner.data?.id;
-                    if (ticketId && !this.knownTicketIds.has(ticketId)) {
-                      this.knownTicketIds.add(ticketId);
-                      console.log('🚨 Buluttan yeni iş emri alındı:', ticketId);
-                      this.notifyListeners(inner);
-                    }
-                  } else if (inner.type === 'TICKET_UPDATED') {
-                    this.notifyListeners(inner);
-                  }
-                }
-              }
-            } catch {}
-          }
-        }
-      } catch (e) {}
+      // A) BULUT MESAJ HAVUZUNU KONTROL ET
+      await this.checkMissedCloudMessages();
 
       // B) YEREL SUNUCU KONTROLÜ
       try {
@@ -183,7 +222,7 @@ class SyncService {
       } catch (e) {
         // Çevrimdışı sessiz geç
       }
-    }, 3000);
+    }, 2500);
   }
 
   // Dinleyici Ekle (App.tsx veya bileşenler dinler)
