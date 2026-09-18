@@ -54,6 +54,57 @@ class SyncService {
     }
   }
 
+  // Gelen ham ntfy mesajından fiş veya güncelleme verisini ayıkla
+  private extractEventFromRaw(raw: any): { type: string; data: any; senderId?: string } | null {
+    if (!raw) return null;
+
+    // 1. Click URL veya action içindeki tjson (Bilet) parametresini çöz
+    const clickUrl = raw.click || (raw.actions && raw.actions[0]?.url);
+    if (clickUrl) {
+      if (clickUrl.includes('tjson=')) {
+        try {
+          const url = new URL(clickUrl);
+          const encoded = url.searchParams.get('tjson');
+          if (encoded) {
+            const ticket = JSON.parse(decodeURIComponent(encoded));
+            const senderId = url.searchParams.get('sid') || raw.senderId;
+            return {
+              type: 'NEW_TICKET_ALERT',
+              senderId,
+              data: { ticket, message: raw.title || 'Yeni servis fişi oluşturuldu!' }
+            };
+          }
+        } catch {}
+      } else if (clickUrl.includes('ujson=')) {
+        try {
+          const url = new URL(clickUrl);
+          const encoded = url.searchParams.get('ujson');
+          if (encoded) {
+            const updateData = JSON.parse(decodeURIComponent(encoded));
+            const senderId = url.searchParams.get('sid') || raw.senderId;
+            return {
+              type: 'TICKET_UPDATED',
+              senderId,
+              data: updateData
+            };
+          }
+        } catch {}
+      }
+    }
+
+    // 2. raw.message bir JSON objesi ise (Eski bildirimler için geriye uyumluluk)
+    if (raw.message) {
+      try {
+        const parsed = JSON.parse(raw.message);
+        if (parsed && parsed.type) {
+          return parsed;
+        }
+      } catch {}
+    }
+
+    return null;
+  }
+
   // Bulut SSE Bağlantısı
   private connectCloudSSE() {
     if (!this.cloudEventSource && typeof EventSource !== 'undefined') {
@@ -68,27 +119,20 @@ class SyncService {
         this.cloudEventSource.onmessage = (e) => {
           try {
             const raw = JSON.parse(e.data);
-            if (raw && raw.message) {
-              let inner: any = null;
-              try {
-                inner = JSON.parse(raw.message);
-              } catch {
-                inner = raw.message;
+            const inner = this.extractEventFromRaw(raw);
+            if (inner && inner.type) {
+              // Kendi gönderdiğimiz mesajın kendi bilgisayarımızda usta alarmı çalmasını önle (Echo koruması)
+              if (inner.senderId && inner.senderId === this.clientId) {
+                return;
               }
-              if (inner && inner.type) {
-                // Kendi gönderdiğimiz mesajın kendi bilgisayarımızda usta alarmı çalmasını önle (Echo koruması)
-                if (inner.senderId && inner.senderId === this.clientId) {
-                  return;
+              if (inner.type === 'NEW_TICKET_ALERT') {
+                const ticketId = inner.data?.ticket?.id || inner.data?.id;
+                if (ticketId) {
+                  if (this.knownTicketIds.has(ticketId)) return;
+                  this.knownTicketIds.add(ticketId);
                 }
-                if (inner.type === 'NEW_TICKET_ALERT') {
-                  const ticketId = inner.data?.ticket?.id || inner.data?.id;
-                  if (ticketId) {
-                    if (this.knownTicketIds.has(ticketId)) return;
-                    this.knownTicketIds.add(ticketId);
-                  }
-                }
-                this.notifyListeners(inner);
               }
+              this.notifyListeners(inner);
             }
           } catch (err) {
             // Sessiz geç
@@ -162,28 +206,21 @@ class SyncService {
             if (item.time && item.time > this.lastPollTimestamp) {
               this.lastPollTimestamp = item.time;
             }
-            if (item.message) {
-              let inner: any = null;
-              try {
-                inner = JSON.parse(item.message);
-              } catch {
-                inner = item.message;
+            const inner = this.extractEventFromRaw(item);
+            if (inner && inner.type) {
+              // Kendi gönderdiğimiz bildirimi kendimizde çalmayalım
+              if (inner.senderId && inner.senderId === this.clientId) {
+                continue;
               }
-              if (inner && inner.type) {
-                // Kendi gönderdiğimiz bildirimi kendimizde çalmayalım
-                if (inner.senderId && inner.senderId === this.clientId) {
-                  continue;
-                }
-                if (inner.type === 'NEW_TICKET_ALERT') {
-                  const ticketId = inner.data?.ticket?.id || inner.data?.id;
-                  if (ticketId && !this.knownTicketIds.has(ticketId)) {
-                    this.knownTicketIds.add(ticketId);
-                    console.log('🚨 Buluttan yeni iş emri alındı:', ticketId);
-                    this.notifyListeners(inner);
-                  }
-                } else if (inner.type === 'TICKET_UPDATED') {
+              if (inner.type === 'NEW_TICKET_ALERT') {
+                const ticketId = inner.data?.ticket?.id || inner.data?.id;
+                if (ticketId && !this.knownTicketIds.has(ticketId)) {
+                  this.knownTicketIds.add(ticketId);
+                  console.log('🚨 Buluttan yeni iş emri alındı:', ticketId);
                   this.notifyListeners(inner);
                 }
+              } else if (inner.type === 'TICKET_UPDATED') {
+                this.notifyListeners(inner);
               }
             }
           } catch {}
@@ -291,20 +328,26 @@ class SyncService {
   // Saha ustasının iPhone'dan hızlı tekil güncellemesi (Hem Buluta Hem Ofis PC'ye Anında Gider)
   async updateTicketField(ticketId: string, updates: Partial<ServiceTicket>): Promise<boolean> {
     try {
-      // 1. Buluta Anında Yayınla (Ofisteki PC saniyeler içinde görür)
+      let statusDesc = 'İş Durumu Güncellendi';
+      if (updates.status === 'delivered') statusDesc = 'Servis Ücreti Tahsil Edildi / İş Kapatıldı';
+      else if (updates.status === 'in_repair') statusDesc = 'İş Alındı / Onarıma Başlandı';
+      else if (updates.status === 'ready') statusDesc = 'Onarım Tamamlandı / Fiş Hazır';
+
+      const updateData = { id: ticketId, ...updates };
+      const encodedUpdate = encodeURIComponent(JSON.stringify(updateData));
+      const targetUrl = `https://servis-pro-seven.vercel.app/?mode=technician&ticket=${ticketId}&sid=${this.clientId}&ujson=${encodedUpdate}`;
+
+      // 1. Buluta Anında Yayınla
       fetch('https://ntfy.sh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           topic: CLOUD_SYNC_TOPIC,
-          title: `✅ FİŞ GÜNCELLENDİ`,
-          message: JSON.stringify({
-            type: 'TICKET_UPDATED',
-            senderId: this.clientId,
-            data: { id: ticketId, ...updates }
-          }),
+          title: `✅ ${statusDesc}`,
+          message: `Fiş No: ${updates.ticketNumber || ticketId}\nSaat: ${new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}`,
           priority: 4,
-          tags: ['clipboard', 'white_check_mark']
+          tags: ['clipboard', 'white_check_mark'],
+          click: targetUrl
         })
       }).catch(() => {});
 
@@ -326,21 +369,34 @@ class SyncService {
   // Ustalara Canlı Bildirim, Ses ve Kilit Ekranı Uyarısı Fırlatma
   async sendTechnicianAlert(ticket: ServiceTicket, message?: string): Promise<boolean> {
     try {
-      // 1. Yüksek Öncelikli Global Bulut Bildirimi (Apple APNs ve ntfy destekli)
+      // 1. İnsan Gözünün Okuyacağı Pırıl Pırıl Türkçe Bildirim Metni (Garip JSON kodları kalktı!)
+      const readableLines = [
+        `👤 Müşteri: ${ticket.customerName}`,
+        `🔧 Cihaz: ${ticket.brand} ${ticket.model && ticket.model !== 'Model Belirtilmedi' ? ticket.model : ''}`.trim(),
+        `⚠️ Arıza: ${ticket.reportedFault}`,
+        `📍 Adres: ${ticket.customerAddress}`,
+        `📞 Tel: ${ticket.customerPhone}`
+      ];
+      const humanReadableText = readableLines.filter(Boolean).join('\n');
+
+      // Fiş verisini URL parametresine gömüyoruz (Böylece bildirim metninde garip kodlar görünmez!)
+      const encodedTicket = encodeURIComponent(JSON.stringify(ticket));
+      const targetUrl = `https://servis-pro-seven.vercel.app/?mode=technician&ticket=${ticket.id}&sid=${this.clientId}&tjson=${encodedTicket}`;
+
+      // Yüksek Öncelikli Global Bulut Bildirimi (Apple APNs ve ntfy destekli)
       fetch('https://ntfy.sh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           topic: CLOUD_SYNC_TOPIC,
-          title: `🚨 YENİ İŞ: ${ticket.customerName} (${ticket.brand} ${ticket.model})`,
-          message: JSON.stringify({
-            type: 'NEW_TICKET_ALERT',
-            senderId: this.clientId,
-            data: { ticket, message: message || 'Yeni servis fişi oluşturuldu!' }
-          }),
+          title: `🚨 YENİ SERVİS İŞİ: ${ticket.ticketNumber}`,
+          message: humanReadableText,
           priority: 5,
           tags: ['wrench', 'bell', 'warning'],
-          click: `https://servis-pro-seven.vercel.app/?mode=technician&ticket=${ticket.id}`
+          click: targetUrl,
+          actions: [
+            { action: 'view', label: 'İşi Aç', url: targetUrl, clear: true }
+          ]
         })
       }).catch((e) => console.warn('Bulut bildirim hatası:', e));
 

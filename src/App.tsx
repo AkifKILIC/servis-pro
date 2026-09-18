@@ -74,10 +74,33 @@ export const App: React.FC = () => {
     storage.saveTheme(theme);
   }, [theme]);
 
-  // Canlı Senkronizasyon Başlatma
+  // Canlı Senkronizasyon Başlatma ve Bildirimden Gelen Fişi Açma
   useEffect(() => {
     syncService.connect();
     setIsLiveConnected(true);
+
+    // Bildirime tıklandığında URL'e gömülü gelen tjson (fiş) verisini anında yakala ve aç
+    if (typeof window !== 'undefined') {
+      try {
+        const searchParams = new URLSearchParams(window.location.search);
+        const tjson = searchParams.get('tjson');
+        if (tjson) {
+          const directTicket: ServiceTicket = JSON.parse(decodeURIComponent(tjson));
+          if (directTicket && directTicket.id) {
+            setTickets((prev) => {
+              const exists = prev.some(t => t.id === directTicket.id);
+              if (exists) return prev;
+              const next = [directTicket, ...prev];
+              storage.saveTickets(next);
+              return next;
+            });
+            setSelectedTicketForDetail(directTicket);
+          }
+        }
+      } catch (err) {
+        console.warn('URL fiş yükleme hatası:', err);
+      }
+    }
 
     // Sunucudan mevcut son verileri çek ve birleştir
     syncService.pullData().then((serverData) => {
