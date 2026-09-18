@@ -13,6 +13,8 @@ class SyncService {
   private listeners: SyncCallback[] = [];
   private isConnected: boolean = false;
   private serverUrl: string = '';
+  private clientId: string = 'cli_' + Math.random().toString(36).substring(2, 9);
+  private lastPollTimestamp: number = Math.floor(Date.now() / 1000) - 30; // son 30 saniye
 
   constructor() {
     // Vite proxy üzerinden /api çağrılarını doğrudan arka plana iletir
@@ -52,9 +54,16 @@ class SyncService {
                 inner = raw.message;
               }
               if (inner && inner.type) {
+                // Kendi gönderdiğimiz mesajın kendi bilgisayarımızda usta alarmı çalmasını önle (Echo koruması)
+                if (inner.senderId && inner.senderId === this.clientId) {
+                  return;
+                }
                 if (inner.type === 'NEW_TICKET_ALERT') {
                   const ticketId = inner.data?.ticket?.id || inner.data?.id;
-                  if (ticketId) this.knownTicketIds.add(ticketId);
+                  if (ticketId) {
+                    if (this.knownTicketIds.has(ticketId)) return;
+                    this.knownTicketIds.add(ticketId);
+                  }
                 }
                 this.notifyListeners(inner);
               }
@@ -111,6 +120,48 @@ class SyncService {
     if (this.pollingInterval) return;
 
     this.pollingInterval = setInterval(async () => {
+      // A) BULUT MESAJ HAVUZUNU KONTROL ET (iPhone ve Vercel İçin 100% Kesintisiz Garanti)
+      try {
+        const pollRes = await fetch(`${CLOUD_NTFY_URL}/json?poll=1&since=${this.lastPollTimestamp}`);
+        if (pollRes.ok) {
+          const text = await pollRes.text();
+          const lines = text.split('\n').filter(Boolean);
+          for (const line of lines) {
+            try {
+              const item = JSON.parse(line);
+              if (item.time && item.time > this.lastPollTimestamp) {
+                this.lastPollTimestamp = item.time;
+              }
+              if (item.message) {
+                let inner: any = null;
+                try {
+                  inner = JSON.parse(item.message);
+                } catch {
+                  inner = item.message;
+                }
+                if (inner && inner.type) {
+                  // Kendi gönderdiğimiz bildirimi kendimizde çalmayalım
+                  if (inner.senderId && inner.senderId === this.clientId) {
+                    continue;
+                  }
+                  if (inner.type === 'NEW_TICKET_ALERT') {
+                    const ticketId = inner.data?.ticket?.id || inner.data?.id;
+                    if (ticketId && !this.knownTicketIds.has(ticketId)) {
+                      this.knownTicketIds.add(ticketId);
+                      console.log('🚨 Buluttan yeni iş emri alındı:', ticketId);
+                      this.notifyListeners(inner);
+                    }
+                  } else if (inner.type === 'TICKET_UPDATED') {
+                    this.notifyListeners(inner);
+                  }
+                }
+              }
+            } catch {}
+          }
+        }
+      } catch (e) {}
+
+      // B) YEREL SUNUCU KONTROLÜ
       try {
         const data = await this.pullData();
         if (data && data.tickets && Array.isArray(data.tickets)) {
@@ -122,7 +173,6 @@ class SyncService {
           for (const ticket of data.tickets) {
             if (!this.knownTicketIds.has(ticket.id)) {
               this.knownTicketIds.add(ticket.id);
-              console.log('🚨 Yeni iş emri tespit edildi:', ticket.ticketNumber);
               this.notifyListeners({
                 type: 'NEW_TICKET_ALERT',
                 data: { ticket, message: 'Yeni servis fişi oluşturuldu!' }
@@ -133,7 +183,7 @@ class SyncService {
       } catch (e) {
         // Çevrimdışı sessiz geç
       }
-    }, 4000);
+    }, 3000);
   }
 
   // Dinleyici Ekle (App.tsx veya bileşenler dinler)
@@ -211,6 +261,7 @@ class SyncService {
           title: `✅ FİŞ GÜNCELLENDİ`,
           message: JSON.stringify({
             type: 'TICKET_UPDATED',
+            senderId: this.clientId,
             data: { id: ticketId, ...updates }
           }),
           priority: 4,
@@ -245,6 +296,7 @@ class SyncService {
           title: `🚨 YENİ İŞ: ${ticket.customerName} (${ticket.brand} ${ticket.model})`,
           message: JSON.stringify({
             type: 'NEW_TICKET_ALERT',
+            senderId: this.clientId,
             data: { ticket, message: message || 'Yeni servis fişi oluşturuldu!' }
           }),
           priority: 5,

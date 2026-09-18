@@ -140,9 +140,19 @@ export const App: React.FC = () => {
             return newTickets;
           });
 
-          // iPhone ve Masaüstü Bildirimi ve Zili Çal
-          showTechnicianJobNotification(alertTicket);
-          setLiveNotification(`🚨 YENİ İŞ EMRİ: ${alertTicket.ticketNumber} - ${alertTicket.customerName}`);
+          // Zili ve kilit ekranı uyarısını SADECE usta cihazında / mobil ekranda çal!
+          // Ofisteki bilgisayarda kendi açtığı iş için usta alarmı çalmaz
+          const isTechnicianDevice = 
+            (typeof window !== 'undefined' && window.innerWidth < 768) ||
+            window.location.search.includes('technician') ||
+            (currentUser?.role === 'technician');
+
+          if (isTechnicianDevice) {
+            showTechnicianJobNotification(alertTicket);
+            setLiveNotification(`🚨 YENİ İŞ EMRİ: ${alertTicket.ticketNumber} - ${alertTicket.customerName}`);
+          } else {
+            setLiveNotification(`✅ Ustayla Paylaşıldı: ${alertTicket.ticketNumber} - ${alertTicket.customerName}`);
+          }
           setTimeout(() => setLiveNotification(null), 8000);
         }
       } else if (event.type === 'FULL_SYNC') {
