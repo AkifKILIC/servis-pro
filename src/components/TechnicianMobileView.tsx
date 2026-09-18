@@ -299,7 +299,7 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {!deviceStatus.isSecure ? (
               <div style={{ background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.25)', borderRadius: '6px', padding: '8px 10px', fontSize: '0.78rem', color: '#fca5a5' }}>
-                <strong>⚠️ Güvenli Bağlantı (HTTPS):</strong> iPhone kilit ekranı bildirimleri için lütfen Vercel adresini kullanın: <strong>https://manga-okuyucu.vercel.app</strong>
+                <strong>⚠️ Güvenli Bağlantı (HTTPS):</strong> iPhone kilit ekranı bildirimleri için lütfen Vercel adresini kullanın: <strong>https://servis-pro-seven.vercel.app</strong>
               </div>
             ) : !deviceStatus.isStandalonePWA ? (
               <div style={{ background: 'rgba(245, 158, 11, 0.12)', border: '1px solid rgba(245, 158, 11, 0.25)', borderRadius: '6px', padding: '8px 10px', fontSize: '0.78rem', color: '#fcd34d' }}>

@@ -249,7 +249,7 @@ class SyncService {
           }),
           priority: 5,
           tags: ['wrench', 'bell', 'warning'],
-          click: `https://manga-okuyucu.vercel.app/?mode=technician&ticket=${ticket.id}`
+          click: `https://servis-pro-seven.vercel.app/?mode=technician&ticket=${ticket.id}`
         })
       }).catch((e) => console.warn('Bulut bildirim hatası:', e));
 
