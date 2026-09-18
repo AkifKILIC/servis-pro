@@ -5,7 +5,7 @@ type SyncCallback = (event: { type: string; data: any }) => void;
 
 // Vercel üzerinde bağımsız çalışan global yüksek hızlı bulut kanalı
 const CLOUD_SYNC_TOPIC = 'servispro_akifkilic_sync';
-const VERCEL_SYNC_ENDPOINT = 'https://servis-pro-seven.vercel.app/api/sync.js';
+const VERCEL_SYNC_ENDPOINT = 'https://servis-pro-seven.vercel.app/api/sync';
 
 class SyncService {
   private localEventSource: EventSource | null = null;
