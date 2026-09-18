@@ -16,8 +16,10 @@ import {
   X,
   Check,
   Plus,
-  BellRing
+  BellRing,
+  RefreshCw
 } from 'lucide-react';
+import { syncService } from '../services/syncService';
 import { ServiceTicket, SparePart } from '../types';
 import { 
   formatCurrency, 
@@ -59,6 +61,13 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
   const [selectedTicket, setSelectedTicket] = useState<ServiceTicket | null>(null);
   const [deviceStatus, setDeviceStatus] = useState(() => checkNotificationSupport());
   const [soundTested, setSoundTested] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    await syncService.checkMissedCloudMessages();
+    setTimeout(() => setIsRefreshing(false), 800);
+  };
 
   // Hızlı Aksiyon Modalları
   const [isServiceFeeModalOpen, setIsServiceFeeModalOpen] = useState(false);
@@ -123,8 +132,10 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
     const fee = parseFloat(serviceFeeAmount) || 0;
 
     onUpdateTicket(selectedTicket.id, {
+      ticketNumber: selectedTicket.ticketNumber,
+      customerName: selectedTicket.customerName,
       status: 'delivered',
-      technicianDiagnosis: serviceFeeNote,
+      technicianDiagnosis: serviceFeeNote.trim(),
       transportCost: fee,
       laborCost: 0,
       partsUsed: [],
@@ -138,7 +149,6 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
 
     setIsServiceFeeModalOpen(false);
     setSelectedTicket(null);
-    alert('İş "Servis Ücreti Alındı" olarak kapatıldı ve ofise bildirildi!');
   };
 
   // 2. İş Alındı / Onarım Başladı İşlemi
@@ -163,8 +173,10 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
     }
 
     onUpdateTicket(selectedTicket.id, {
+      ticketNumber: selectedTicket.ticketNumber,
+      customerName: selectedTicket.customerName,
       status: repairStatus,
-      technicianDiagnosis: repairDiagnosis.trim() || 'Arıza tespit edildi, onarım onaylandı.',
+      technicianDiagnosis: repairDiagnosis.trim() || 'Arıza tespit edildi, onarıma başlandı.',
       partsUsed: updatedParts,
       laborCost: laborCost,
       totalAmount: total,
@@ -173,7 +185,6 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
 
     setIsJobAcceptedModalOpen(false);
     setSelectedTicket(null);
-    alert('İş detayları ve tutar başarıyla kaydedildi, ofis ekranında güncellendi!');
   };
 
   return (
@@ -201,26 +212,48 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
           </p>
         </div>
 
-        <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
-          <span style={{ fontSize: '0.78rem', color: 'var(--primary)', fontWeight: 700 }}>
-            📱 iPhone Modu
-          </span>
-          {currentUser && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span style={{ fontSize: '0.72rem', color: '#10b981', background: 'rgba(16, 185, 129, 0.15)', padding: '2px 6px', borderRadius: '6px' }}>
-                👤 {currentUser.name}
-              </span>
-              {onLogout && (
-                <button
-                  type="button"
-                  onClick={onLogout}
-                  style={{ background: 'none', border: 'none', color: '#f43f5e', fontSize: '0.72rem', cursor: 'pointer', textDecoration: 'underline', padding: '0' }}
-                >
-                  Çıkış
-                </button>
-              )}
-            </div>
-          )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <button 
+            type="button" 
+            className="btn btn-secondary btn-sm"
+            onClick={handleRefresh}
+            style={{ 
+              padding: '6px 10px', 
+              fontSize: '0.78rem', 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: '6px',
+              borderRadius: 'var(--radius-pill)',
+              background: isRefreshing ? 'rgba(59, 130, 246, 0.2)' : 'rgba(255, 255, 255, 0.08)',
+              color: isRefreshing ? 'var(--primary)' : 'var(--text-main)',
+              border: '1px solid var(--border-subtle)'
+            }}
+          >
+            <RefreshCw size={14} className={isRefreshing ? 'spin-animation' : ''} />
+            <span>{isRefreshing ? 'Yenileniyor' : 'Yenile'}</span>
+          </button>
+
+          <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
+            <span style={{ fontSize: '0.78rem', color: 'var(--primary)', fontWeight: 700 }}>
+              📱 iPhone Modu
+            </span>
+            {currentUser && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ fontSize: '0.72rem', color: '#10b981', background: 'rgba(16, 185, 129, 0.15)', padding: '2px 6px', borderRadius: '6px' }}>
+                  👤 {currentUser.name}
+                </span>
+                {onLogout && (
+                  <button
+                    type="button"
+                    onClick={onLogout}
+                    style={{ background: 'none', border: 'none', color: '#f43f5e', fontSize: '0.72rem', cursor: 'pointer', textDecoration: 'underline', padding: '0' }}
+                  >
+                    Çıkış
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 

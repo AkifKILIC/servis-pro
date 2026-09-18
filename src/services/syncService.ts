@@ -5,13 +5,13 @@ type SyncCallback = (event: { type: string; data: any }) => void;
 
 // Vercel üzerinde bağımsız çalışan global yüksek hızlı bulut kanalı
 const CLOUD_SYNC_TOPIC = 'servispro_akifkilic_sync';
-const CLOUD_NTFY_URL = `https://ntfy.sh/${CLOUD_SYNC_TOPIC}`;
+const VERCEL_SYNC_ENDPOINT = 'https://servis-pro-seven.vercel.app/api/sync.js';
 
 class SyncService {
   private localEventSource: EventSource | null = null;
   private cloudEventSource: EventSource | null = null;
   private listeners: SyncCallback[] = [];
-  private isConnected: boolean = false;
+  private isConnected: boolean = true;
   private serverUrl: string = '';
   private clientId: string = 'cli_' + Math.random().toString(36).substring(2, 9);
   private lastPollTimestamp: number = Math.floor(Date.now() / 1000) - 30; // son 30 saniye
@@ -63,7 +63,7 @@ class SyncService {
     if (clickUrl) {
       if (clickUrl.includes('tjson=')) {
         try {
-          const url = new URL(clickUrl);
+          const url = new URL(clickUrl, 'https://servis-pro-seven.vercel.app');
           const encoded = url.searchParams.get('tjson');
           if (encoded) {
             const ticket = JSON.parse(decodeURIComponent(encoded));
@@ -77,7 +77,7 @@ class SyncService {
         } catch {}
       } else if (clickUrl.includes('ujson=')) {
         try {
-          const url = new URL(clickUrl);
+          const url = new URL(clickUrl, 'https://servis-pro-seven.vercel.app');
           const encoded = url.searchParams.get('ujson');
           if (encoded) {
             const updateData = JSON.parse(decodeURIComponent(encoded));
@@ -107,76 +107,30 @@ class SyncService {
 
   // Bulut SSE Bağlantısı
   private connectCloudSSE() {
-    if (!this.cloudEventSource && typeof EventSource !== 'undefined') {
-      try {
-        this.cloudEventSource = new EventSource(`${CLOUD_NTFY_URL}/sse`);
-
-        this.cloudEventSource.onopen = () => {
-          this.isConnected = true;
-          console.log('⚡ ServisPro Global Bulut Senkronizasyon Bağlantısı Kuruldu');
-        };
-
-        this.cloudEventSource.onmessage = (e) => {
-          try {
-            const raw = JSON.parse(e.data);
-            const inner = this.extractEventFromRaw(raw);
-            if (inner && inner.type) {
-              // Kendi gönderdiğimiz mesajın kendi bilgisayarımızda usta alarmı çalmasını önle (Echo koruması)
-              if (inner.senderId && inner.senderId === this.clientId) {
-                return;
-              }
-              if (inner.type === 'NEW_TICKET_ALERT') {
-                const ticketId = inner.data?.ticket?.id || inner.data?.id;
-                if (ticketId) {
-                  if (this.knownTicketIds.has(ticketId)) return;
-                  this.knownTicketIds.add(ticketId);
-                }
-              }
-              this.notifyListeners(inner);
-            }
-          } catch (err) {
-            // Sessiz geç
-          }
-        };
-
-        this.cloudEventSource.onerror = () => {
-          // EventSource tarayıcı tarafından otomatik olarak yeniden denenir
-        };
-      } catch (err) {
-        console.warn('Bulut senkronizasyon başlatılamadı:', err);
-      }
-    }
+    // SSE bağlantısı yerine Vercel üzerinden yüksek hızlı akıllı yoklama (polling) kullanıyoruz
+    // Bu sayede Türkiye'deki hiçbir internet servis sağlayıcısında kesilme veya engelleme yaşanmaz.
+    this.isConnected = true;
   }
 
   public reconnectCloudSSE() {
-    if (this.cloudEventSource) {
-      try {
-        this.cloudEventSource.close();
-      } catch {}
-      this.cloudEventSource = null;
-    }
-    this.connectCloudSSE();
+    this.checkMissedCloudMessages();
   }
 
   // Yerel Sunucu SSE Bağlantısı (Masaüstü PC & Yerel Ağ)
   private connectLocalSSE() {
-    if (!this.localEventSource && typeof EventSource !== 'undefined' && (this.serverUrl || window.location.hostname === 'localhost')) {
+    if (this.serverUrl || (typeof window !== 'undefined' && window.location.hostname === 'localhost')) {
+      const url = `${this.serverUrl}/api/events`;
       try {
-        const localUrl = this.serverUrl || '';
-        this.localEventSource = new EventSource(`${localUrl}/api/events`);
+        this.localEventSource = new EventSource(url);
 
         this.localEventSource.onopen = () => {
           this.isConnected = true;
-          console.log('⚡ ServisPro Yerel Sunucu Bağlantısı Kuruldu');
         };
 
         this.localEventSource.onmessage = (e) => {
           try {
             const parsed = JSON.parse(e.data);
             if (parsed && parsed.type) {
-              if (parsed.type === 'NEW_TICKET_ALERT' && parsed.data?.ticket?.id) {
-                this.knownTicketIds.add(parsed.data.ticket.id);
-              }
               this.notifyListeners(parsed);
             }
           } catch (err) {
@@ -196,7 +150,9 @@ class SyncService {
   // Buluttaki bekleyen tüm yeni mesajları ve işleri sorgula (Ekran açıldığında ve periyodik)
   public async checkMissedCloudMessages() {
     try {
-      const pollRes = await fetch(`${CLOUD_NTFY_URL}/json?poll=1&since=${this.lastPollTimestamp}`);
+      const pollRes = await fetch(`${VERCEL_SYNC_ENDPOINT}?since=${this.lastPollTimestamp}`, {
+        signal: AbortSignal.timeout(5000)
+      });
       if (pollRes.ok) {
         const text = await pollRes.text();
         const lines = text.split('\n').filter(Boolean);
@@ -229,12 +185,12 @@ class SyncService {
     } catch (e) {}
   }
 
-  // iPhone için Akıllı Arka Plan Sorgulama (SSE kesilirse veya uyursa bile yeni işi kaçırmaz)
+  // iPhone ve Ofis PC için Yüksek Hızlı Akıllı Senkronizasyon (3.5 saniyede bir taranır)
   private startSmartPolling() {
     if (this.pollingInterval) return;
 
     this.pollingInterval = setInterval(async () => {
-      // A) BULUT MESAJ HAVUZUNU KONTROL ET
+      // A) BULUT MESAJ HAVUZUNU KONTROL ET (Vercel Proxy)
       await this.checkMissedCloudMessages();
 
       // B) YEREL SUNUCU KONTROLÜ
@@ -251,15 +207,15 @@ class SyncService {
               this.knownTicketIds.add(ticket.id);
               this.notifyListeners({
                 type: 'NEW_TICKET_ALERT',
-                data: { ticket, message: 'Yeni servis fişi oluşturuldu!' }
+                data: { ticket, message: 'Yeni servis kaydı açıldı!' }
               });
             }
           }
         }
-      } catch (e) {
-        // Çevrimdışı sessiz geç
+      } catch (err) {
+        // Yerel sunucu yoksa sessizce buluttan devam et
       }
-    }, 30000);
+    }, 3500);
   }
 
   // Dinleyici Ekle (App.tsx veya bileşenler dinler)
@@ -270,7 +226,7 @@ class SyncService {
     };
   }
 
-  private notifyListeners(event: { type: string; data: any }) {
+  private notifyListeners(event: { type: string; data: any; senderId?: string }) {
     this.listeners.forEach(cb => {
       try {
         cb(event);
@@ -313,11 +269,11 @@ class SyncService {
     }
   }
 
-  // Saha ustasının iPhone'dan hızlı tekil güncellemesi (Hem Buluta Hem Ofis PC'ye Anında Gider)
+  // Saha ustasının iPhone'dan hızlı tekil güncellemesi (Vercel Üzerinden Anında Ofise Ulaşır)
   async updateTicketField(ticketId: string, updates: Partial<ServiceTicket>): Promise<boolean> {
     try {
       let statusDesc = 'İş Durumu Güncellendi';
-      if (updates.status === 'delivered') statusDesc = 'Servis Ücreti Tahsil Edildi / İş Kapatıldı';
+      if (updates.status === 'delivered') statusDesc = 'Servis Ücreti Tahsil Edildi / Fiş Kapatıldı';
       else if (updates.status === 'in_repair') statusDesc = 'İş Alındı / Onarıma Başlandı';
       else if (updates.status === 'ready') statusDesc = 'Onarım Tamamlandı / Fiş Hazır';
 
@@ -325,14 +281,23 @@ class SyncService {
       const encodedUpdate = encodeURIComponent(JSON.stringify(updateData));
       const targetUrl = `https://servis-pro-seven.vercel.app/?mode=technician&ticket=${ticketId}&sid=${this.clientId}&ujson=${encodedUpdate}`;
 
-      // 1. Buluta Anında Yayınla
-      fetch('https://ntfy.sh', {
+      const custName = updates.customerName || '';
+      const tNum = updates.ticketNumber || ticketId;
+      const cleanMsg = [
+        custName ? `👤 Müşteri: ${custName}` : '',
+        `📋 Fiş No: ${tNum}`,
+        updates.totalAmount ? `💰 Tahsilat: ${updates.totalAmount} TL` : '',
+        `⏰ Saat: ${new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}`
+      ].filter(Boolean).join('\n');
+
+      // 1. Vercel Bulut Kanalına Anında Yayınla (Ofis PC'ye doğrudan düşer)
+      fetch(VERCEL_SYNC_ENDPOINT, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           topic: CLOUD_SYNC_TOPIC,
           title: `✅ ${statusDesc}`,
-          message: `Fiş No: ${updates.ticketNumber || ticketId}\nSaat: ${new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}`,
+          message: cleanMsg,
           priority: 4,
           tags: ['clipboard', 'white_check_mark'],
           click: targetUrl
@@ -370,7 +335,7 @@ class SyncService {
       const devName = deviceLabels[ticket.deviceType] || ticket.deviceType || 'Cihaz';
       const devDetail = [devName, ticket.brand, (ticket.model && ticket.model !== 'Model Belirtilmedi') ? ticket.model : ''].filter(Boolean).join(' ');
 
-      // 1. İnsan Gözünün Okuyacağı Pırıl Pırıl Türkçe Bildirim Metni (Garip JSON kodları tamamen temizlendi!)
+      // 1. İnsan Gözünün Okuyacağı Pırıl Pırıl Türkçe Bildirim Metni
       const readableLines = [
         `👤 Müşteri: ${ticket.customerName}`,
         `🔧 Cihaz: ${devDetail}`,
@@ -380,12 +345,12 @@ class SyncService {
       ];
       const humanReadableText = readableLines.filter(Boolean).join('\n');
 
-      // Fiş verisini URL parametresine gömüyoruz (Böylece bildirim metninde garip kodlar görünmez!)
+      // Fiş verisini URL parametresine gömüyoruz
       const encodedTicket = encodeURIComponent(JSON.stringify(ticket));
       const targetUrl = `https://servis-pro-seven.vercel.app/?mode=technician&ticket=${ticket.id}&sid=${this.clientId}&tjson=${encodedTicket}`;
 
-      // Yüksek Öncelikli Global Bulut Bildirimi (Apple APNs ve ntfy destekli)
-      fetch('https://ntfy.sh', {
+      // Yüksek Öncelikli Global Bulut Bildirimi (Vercel Proxy Üzerinden Kesintisiz)
+      fetch(VERCEL_SYNC_ENDPOINT, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

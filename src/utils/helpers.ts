@@ -284,8 +284,7 @@ export const generateJobCardText = (
     `📍 *Adres:* ${ticket.customerAddress}\n` +
     `⚠️ *Şikayet:* ${ticket.reportedFault}\n` +
     `⏰ *Randevu:* ${ticket.scheduledDate || 'Bugün'} ${ticket.scheduledTimeSlot || ''}\n\n` +
-    `🗺️ *Harita Konumu:* ${mapsLink}\n\n` +
-    `👉 *Uygun olan usta bu mesaja "Ben Gidiyorum" yazsın.*`;
+    `🗺️ *Harita Konumu:* ${mapsLink}`;
 };
 
 // WhatsApp Grup Paylaşımı (Telefon numarası olmadan çağrıldığında doğrudan grup seçme diyaloğu açılır)

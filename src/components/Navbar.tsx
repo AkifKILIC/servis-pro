@@ -43,24 +43,38 @@ export const Navbar: React.FC<NavbarProps> = ({
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-        <button 
-          onClick={onToggleMenu} 
-          style={{
-            background: 'none',
-            border: 'none',
-            color: 'var(--text-main)',
-            cursor: 'pointer',
-            padding: '6px',
-            display: 'flex',
-            alignItems: 'center'
-          }}
-          aria-label="Menüyü Aç"
-        >
-          <Menu size={24} />
-        </button>
+        {!isTechMode && currentUser?.role !== 'technician' && (
+          <button 
+            onClick={onToggleMenu} 
+            style={{
+              background: 'none',
+              border: 'none',
+              color: 'var(--text-main)',
+              cursor: 'pointer',
+              padding: '6px',
+              display: 'flex',
+              alignItems: 'center'
+            }}
+            aria-label="Menüyü Aç"
+          >
+            <Menu size={24} />
+          </button>
+        )}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <Wrench size={20} color="var(--primary)" />
           <span style={{ fontWeight: 700, fontSize: '1rem' }}>{settings.shopName}</span>
+          {isTechMode && (
+            <span style={{ 
+              fontSize: '0.75rem', 
+              padding: '2px 8px', 
+              borderRadius: 'var(--radius-pill)', 
+              background: 'rgba(59, 130, 246, 0.15)', 
+              color: 'var(--primary)',
+              fontWeight: 700
+            }}>
+              Saha Ekibi
+            </span>
+          )}
         </div>
 
         {/* Canlı Bağlantı Rozeti */}
@@ -84,39 +98,49 @@ export const Navbar: React.FC<NavbarProps> = ({
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-        {/* Mod Değiştirici: Ofis vs Saha */}
-        <button
-          type="button"
-          className="btn btn-secondary btn-sm"
-          style={{ 
-            background: isTechMode ? 'rgba(59, 130, 246, 0.2)' : 'rgba(255, 255, 255, 0.05)',
-            borderColor: isTechMode ? 'var(--primary)' : undefined,
-            color: isTechMode ? 'var(--primary)' : undefined
-          }}
-          onClick={() => setActiveTab(isTechMode ? 'dashboard' : 'technician')}
-        >
-          {isTechMode ? <Monitor size={15} /> : <Smartphone size={15} />}
-          <span>{isTechMode ? 'Ofis Ekranına Geç' : 'Saha Usta Ekranı'}</span>
-        </button>
+        {/* Sadece Ofis Yöneticisi Saha Önizlemesine Geçebilir - Usta Ofise Geçemez */}
+        {!isTechMode && currentUser?.role !== 'technician' && (
+          <>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              style={{ 
+                background: 'rgba(255, 255, 255, 0.05)',
+                color: 'var(--text-main)'
+              }}
+              onClick={() => setActiveTab('technician')}
+            >
+              <Smartphone size={15} />
+              <span>Saha Usta Ekranı</span>
+            </button>
 
-        <button 
-          className="btn btn-primary btn-sm"
-          onClick={onOpenNewTicket}
-          style={{ padding: '6px 12px' }}
-        >
-          <PlusCircle size={16} />
-          <span>Yeni Fiş</span>
-        </button>
+            <button 
+              className="btn btn-primary btn-sm"
+              onClick={onOpenNewTicket}
+              style={{ padding: '6px 12px' }}
+            >
+              <PlusCircle size={16} />
+              <span>Yeni Fiş</span>
+            </button>
+          </>
+        )}
 
         {currentUser && (
           <button
             type="button"
             className="btn btn-secondary btn-sm"
             onClick={onLogout}
-            title={`${currentUser.name} oturumunu kapat`}
-            style={{ padding: '6px 8px', color: '#f43f5e' }}
+            style={{ 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: '6px', 
+              color: '#f43f5e',
+              background: 'rgba(244, 63, 94, 0.08)',
+              borderColor: 'rgba(244, 63, 94, 0.2)'
+            }}
           >
-            <LogOut size={16} />
+            <LogOut size={15} />
+            <span style={{ display: isTechMode ? 'none' : 'inline' }}>Çıkış</span>
           </button>
         )}
       </div>

@@ -27,7 +27,7 @@ import { AccountingView } from './components/AccountingView';
 import { SettingsView } from './components/SettingsView';
 import { TechnicianMobileView } from './components/TechnicianMobileView';
 import { LoginView } from './components/LoginView';
-import { registerServiceWorker, showTechnicianJobNotification } from './utils/notifications';
+import { registerServiceWorker, showTechnicianJobNotification, playNotificationSound } from './utils/notifications';
 import { AuthUser, getAuthSession, clearAuthSession } from './utils/auth';
 import { generateTechnicianDispatchWhatsAppLink } from './utils/helpers';
 
@@ -149,8 +149,26 @@ export const App: React.FC = () => {
             return newTickets;
           });
 
-          setLiveNotification(`🔔 ${updateData.ticketNumber || 'Servis Fişi'}: Saha ustası durumu güncelledi!`);
-          setTimeout(() => setLiveNotification(null), 5000);
+          // Açık olan detay modalı varsa onu da anında canlı güncelle
+          setSelectedTicketForDetail((prev) => {
+            if (prev && prev.id === updateData.id) {
+              return { ...prev, ...updateData };
+            }
+            return prev;
+          });
+
+          // Ofisteki bilgisayarda sesli zil çal
+          playNotificationSound();
+
+          let statusDesc = 'İş Durumu Güncellendi';
+          if (updateData.status === 'delivered') statusDesc = 'Servis Ücreti Tahsil Edildi / Fiş Kapatıldı';
+          else if (updateData.status === 'in_repair') statusDesc = 'İş Alındı / Onarıma Başlandı';
+          else if (updateData.status === 'ready') statusDesc = 'Onarım Tamamlandı / Fiş Hazır';
+
+          const who = updateData.customerName ? `${updateData.customerName} - ` : '';
+          const tNum = updateData.ticketNumber || updateData.id;
+          setLiveNotification(`🔔 SAHA USTASI: ${who}${statusDesc} (${tNum})`);
+          setTimeout(() => setLiveNotification(null), 8000);
         }
       } else if (event.type === 'NEW_TICKET_ALERT') {
         const alertTicket: ServiceTicket = event.data?.ticket || event.data;
@@ -195,6 +213,14 @@ export const App: React.FC = () => {
     });
 
     registerServiceWorker();
+
+    (window as any).__REFRESH_DATA__ = () => {
+      setTickets(storage.getTickets());
+      setCustomers(storage.getCustomers());
+      setParts(storage.getParts());
+      setTransactions(storage.getCashTransactions());
+      syncService.checkMissedCloudMessages();
+    };
 
     return () => {
       unsubscribe();
@@ -420,26 +446,37 @@ export const App: React.FC = () => {
         </div>
       )}
 
-      {/* Sidebar for Desktop */}
-      <Sidebar 
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        openNewTicketModal={() => {
-          setTicketToEdit(null);
-          setIsTicketModalOpen(true);
-        }}
-        theme={theme}
-        toggleTheme={toggleTheme}
-        settings={settings}
-        pendingCount={pendingCount}
-        urgentCount={urgentCount}
-        lowStockCount={lowStockCount}
-        isOpen={isSidebarOpen}
-        setIsOpen={setIsSidebarOpen}
-      />
+      {/* Sidebar for Desktop: Sadece ofis modunda gösterilir, usta saha ile ofis arasında geçiş yapamaz */}
+      {activeTab !== 'technician' && currentUser?.role !== 'technician' && (
+        <Sidebar 
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          openNewTicketModal={() => {
+            setTicketToEdit(null);
+            setIsTicketModalOpen(true);
+          }}
+          theme={theme}
+          toggleTheme={toggleTheme}
+          settings={settings}
+          pendingCount={pendingCount}
+          urgentCount={urgentCount}
+          lowStockCount={lowStockCount}
+          isOpen={isSidebarOpen}
+          setIsOpen={setIsSidebarOpen}
+        />
+      )}
 
       {/* Main Content Area */}
-      <main className="main-content">
+      <main 
+        className="main-content"
+        style={activeTab === 'technician' ? {
+          marginLeft: 0,
+          width: '100%',
+          maxWidth: '680px',
+          margin: '0 auto',
+          padding: '16px 12px 60px 12px'
+        } : undefined}
+      >
         {/* Mobile / Top Header */}
         <Navbar 
           onToggleMenu={() => setIsSidebarOpen(!isSidebarOpen)}
@@ -560,44 +597,39 @@ export const App: React.FC = () => {
         )}
       </main>
 
-      {/* Mobile Bottom Navigation Bar */}
-      <nav className="mobile-bottom-nav no-print">
-        <button 
-          className={`mobile-nav-item ${activeTab === 'technician' ? 'active' : ''}`}
-          onClick={() => setActiveTab('technician')}
-        >
-          <Smartphone size={20} />
-          <span>Saha</span>
-        </button>
-        <button 
-          className={`mobile-nav-item ${activeTab === 'dashboard' ? 'active' : ''}`}
-          onClick={() => setActiveTab('dashboard')}
-        >
-          <LayoutDashboard size={20} />
-          <span>Özet</span>
-        </button>
-        <button 
-          className={`mobile-nav-item ${activeTab === 'tickets' ? 'active' : ''}`}
-          onClick={() => setActiveTab('tickets')}
-        >
-          <Wrench size={20} />
-          <span>Fişler</span>
-        </button>
-        <button 
-          className={`mobile-nav-item ${activeTab === 'customers' ? 'active' : ''}`}
-          onClick={() => setActiveTab('customers')}
-        >
-          <Users size={20} />
-          <span>Müşteri</span>
-        </button>
-        <button 
-          className={`mobile-nav-item ${activeTab === 'inventory' ? 'active' : ''}`}
-          onClick={() => setActiveTab('inventory')}
-        >
-          <Package size={20} />
-          <span>Stok</span>
-        </button>
-      </nav>
+      {/* Mobile Bottom Navigation Bar: Sadece ofis modunda gezinmeye izin verilir, usta saha ile ofis arasında geçiş yapamaz */}
+      {activeTab !== 'technician' && currentUser?.role !== 'technician' && (
+        <nav className="mobile-bottom-nav no-print">
+          <button 
+            className={`mobile-nav-item ${activeTab === 'dashboard' ? 'active' : ''}`}
+            onClick={() => setActiveTab('dashboard')}
+          >
+            <LayoutDashboard size={20} />
+            <span>Özet</span>
+          </button>
+          <button 
+            className={`mobile-nav-item ${activeTab === 'tickets' ? 'active' : ''}`}
+            onClick={() => setActiveTab('tickets')}
+          >
+            <Wrench size={20} />
+            <span>Fişler</span>
+          </button>
+          <button 
+            className={`mobile-nav-item ${activeTab === 'customers' ? 'active' : ''}`}
+            onClick={() => setActiveTab('customers')}
+          >
+            <Users size={20} />
+            <span>Müşteri</span>
+          </button>
+          <button 
+            className={`mobile-nav-item ${activeTab === 'inventory' ? 'active' : ''}`}
+            onClick={() => setActiveTab('inventory')}
+          >
+            <Package size={20} />
+            <span>Stok</span>
+          </button>
+        </nav>
+      )}
 
       {/* Modallar */}
       <TicketModal 

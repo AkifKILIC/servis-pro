@@ -24,7 +24,14 @@ export default async function handler(req, res) {
 
   if (req.method === 'POST') {
     try {
-      const payload = req.body || {};
+      let payload = req.body || {};
+      if (typeof payload === 'string') {
+        try {
+          payload = JSON.parse(payload);
+        } catch {
+          payload = { message: payload };
+        }
+      }
       const ntfyRes = await fetch('https://ntfy.sh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

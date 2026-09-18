@@ -57,10 +57,18 @@ function createWindow() {
   });
 
   // F12 veya Ctrl+Shift+I ile Geliştirici Araçlarını açma/kapama
+  // F5 veya Ctrl+R ile Anında Yenileme
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.key === 'F12' || (input.control && input.shift && input.key.toLowerCase() === 'i')) {
       mainWindow.webContents.toggleDevTools();
     }
+    if (input.key === 'F5' || (input.control && input.key.toLowerCase() === 'r')) {
+      mainWindow.reload();
+    }
+  });
+
+  mainWindow.on('focus', () => {
+    mainWindow.webContents.executeJavaScript('if (window.__REFRESH_DATA__) window.__REFRESH_DATA__();').catch(() => {});
   });
 
   mainWindow.on('closed', () => {
