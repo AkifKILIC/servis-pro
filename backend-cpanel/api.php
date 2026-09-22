@@ -108,6 +108,40 @@ function ensureTablesExist($pdo) {
       `paymentMethod` VARCHAR(50) NOT NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+    CREATE TABLE IF NOT EXISTS `current_accounts` (
+      `id` VARCHAR(64) NOT NULL PRIMARY KEY,
+      `name` VARCHAR(255) NOT NULL,
+      `type` VARCHAR(50) NOT NULL,
+      `phone` VARCHAR(50) NOT NULL,
+      `phone2` VARCHAR(50) DEFAULT NULL,
+      `email` VARCHAR(255) DEFAULT NULL,
+      `taxOrIdNumber` VARCHAR(100) DEFAULT NULL,
+      `authorizedPerson` VARCHAR(255) DEFAULT NULL,
+      `city` VARCHAR(100) NOT NULL,
+      `district` VARCHAR(100) NOT NULL,
+      `address` TEXT DEFAULT NULL,
+      `balance` DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+      `creditLimit` DECIMAL(12,2) DEFAULT 0.00,
+      `notes` TEXT DEFAULT NULL,
+      `createdAt` VARCHAR(50) NOT NULL,
+      `updatedAt` VARCHAR(50) NOT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+    CREATE TABLE IF NOT EXISTS `current_transactions` (
+      `id` VARCHAR(64) NOT NULL PRIMARY KEY,
+      `accountId` VARCHAR(64) NOT NULL,
+      `accountName` VARCHAR(255) NOT NULL,
+      `type` VARCHAR(20) NOT NULL,
+      `amount` DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+      `date` VARCHAR(50) NOT NULL,
+      `description` TEXT NOT NULL,
+      `documentNo` VARCHAR(100) DEFAULT NULL,
+      `paymentMethod` VARCHAR(50) DEFAULT NULL,
+      `relatedTicketId` VARCHAR(64) DEFAULT NULL,
+      `relatedCashTxId` VARCHAR(64) DEFAULT NULL,
+      `createdAt` VARCHAR(50) NOT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
     CREATE TABLE IF NOT EXISTS `shop_settings` (
       `id` INT NOT NULL DEFAULT 1 PRIMARY KEY,
       `settings_json` LONGTEXT NOT NULL,
@@ -167,6 +201,23 @@ try {
                 return $c;
             }, $rawCash);
 
+            // Cari Hesaplar
+            $cariStmt = $pdo->query("SELECT * FROM current_accounts ORDER BY updatedAt DESC");
+            $rawCari = $cariStmt->fetchAll();
+            $currentAccounts = array_map(function($ca) {
+                $ca['balance'] = (float)$ca['balance'];
+                $ca['creditLimit'] = (float)$ca['creditLimit'];
+                return $ca;
+            }, $rawCari);
+
+            // Cari Hareketler
+            $ctxStmt = $pdo->query("SELECT * FROM current_transactions ORDER BY date DESC");
+            $rawCtx = $ctxStmt->fetchAll();
+            $currentTransactions = array_map(function($ct) {
+                $ct['amount'] = (float)$ct['amount'];
+                return $ct;
+            }, $rawCtx);
+
             // Ayarlar
             $setStmt = $pdo->query("SELECT settings_json FROM shop_settings WHERE id = 1");
             $setRow = $setStmt->fetch();
@@ -178,10 +229,13 @@ try {
                 'tickets' => $tickets,
                 'parts' => $parts,
                 'cash' => $cash,
+                'currentAccounts' => $currentAccounts,
+                'currentTransactions' => $currentTransactions,
                 'settings' => $settings,
                 'serverTime' => date('c')
             ], JSON_UNESCAPED_UNICODE);
             break;
+
 
         // -------------------------------------------------------------
         // 2. TAM SENKRONİZASYON / YEDEK YÜKLEME
@@ -233,6 +287,30 @@ try {
                     $stmt->execute([
                         $c['id'], $c['type'], $c['category'], $c['amount'], $c['date'],
                         $c['description'], $c['relatedTicketId'] ?? null, $c['paymentMethod']
+                    ]);
+                }
+            }
+
+            if (!empty($body['currentAccounts']) && is_array($body['currentAccounts'])) {
+                $stmt = $pdo->prepare("REPLACE INTO current_accounts (id, name, type, phone, phone2, email, taxOrIdNumber, authorizedPerson, city, district, address, balance, creditLimit, notes, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+                foreach ($body['currentAccounts'] as $ca) {
+                    $stmt->execute([
+                        $ca['id'], $ca['name'], $ca['type'], $ca['phone'], $ca['phone2'] ?? null,
+                        $ca['email'] ?? null, $ca['taxOrIdNumber'] ?? null, $ca['authorizedPerson'] ?? null,
+                        $ca['city'], $ca['district'], $ca['address'] ?? null, $ca['balance'] ?? 0,
+                        $ca['creditLimit'] ?? 0, $ca['notes'] ?? null, $ca['createdAt'], $ca['updatedAt']
+                    ]);
+                }
+            }
+
+            if (!empty($body['currentTransactions']) && is_array($body['currentTransactions'])) {
+                $stmt = $pdo->prepare("REPLACE INTO current_transactions (id, accountId, accountName, type, amount, date, description, documentNo, paymentMethod, relatedTicketId, relatedCashTxId, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+                foreach ($body['currentTransactions'] as $ct) {
+                    $stmt->execute([
+                        $ct['id'], $ct['accountId'], $ct['accountName'], $ct['type'],
+                        $ct['amount'] ?? 0, $ct['date'], $ct['description'], $ct['documentNo'] ?? null,
+                        $ct['paymentMethod'] ?? null, $ct['relatedTicketId'] ?? null, $ct['relatedCashTxId'] ?? null,
+                        $ct['createdAt']
                     ]);
                 }
             }
@@ -346,7 +424,53 @@ try {
             break;
 
         // -------------------------------------------------------------
-        // 8. AYARLARI KAYDET
+        // 8. CARİ HESAP KAYDET & SİL
+        // -------------------------------------------------------------
+        case 'current_account_save':
+            $ca = $body;
+            $stmt = $pdo->prepare("REPLACE INTO current_accounts (id, name, type, phone, phone2, email, taxOrIdNumber, authorizedPerson, city, district, address, balance, creditLimit, notes, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+            $stmt->execute([
+                $ca['id'], $ca['name'], $ca['type'], $ca['phone'], $ca['phone2'] ?? null,
+                $ca['email'] ?? null, $ca['taxOrIdNumber'] ?? null, $ca['authorizedPerson'] ?? null,
+                $ca['city'], $ca['district'], $ca['address'] ?? null, $ca['balance'] ?? 0,
+                $ca['creditLimit'] ?? 0, $ca['notes'] ?? null, $ca['createdAt'], $ca['updatedAt']
+            ]);
+            echo json_encode(['success' => true, 'currentAccount' => $ca]);
+            break;
+
+        case 'current_account_delete':
+            $id = $body['id'] ?? $_GET['id'] ?? '';
+            $stmt = $pdo->prepare("DELETE FROM current_accounts WHERE id = ?");
+            $stmt->execute([$id]);
+            $stmt2 = $pdo->prepare("DELETE FROM current_transactions WHERE accountId = ?");
+            $stmt2->execute([$id]);
+            echo json_encode(['success' => true, 'id' => $id]);
+            break;
+
+        // -------------------------------------------------------------
+        // 9. CARİ HAREKET KAYDET & SİL
+        // -------------------------------------------------------------
+        case 'current_tx_save':
+            $ct = $body;
+            $stmt = $pdo->prepare("REPLACE INTO current_transactions (id, accountId, accountName, type, amount, date, description, documentNo, paymentMethod, relatedTicketId, relatedCashTxId, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+            $stmt->execute([
+                $ct['id'], $ct['accountId'], $ct['accountName'], $ct['type'],
+                $ct['amount'] ?? 0, $ct['date'], $ct['description'], $ct['documentNo'] ?? null,
+                $ct['paymentMethod'] ?? null, $ct['relatedTicketId'] ?? null, $ct['relatedCashTxId'] ?? null,
+                $ct['createdAt']
+            ]);
+            echo json_encode(['success' => true, 'currentTransaction' => $ct]);
+            break;
+
+        case 'current_tx_delete':
+            $id = $body['id'] ?? $_GET['id'] ?? '';
+            $stmt = $pdo->prepare("DELETE FROM current_transactions WHERE id = ?");
+            $stmt->execute([$id]);
+            echo json_encode(['success' => true, 'id' => $id]);
+            break;
+
+        // -------------------------------------------------------------
+        // 10. AYARLARI KAYDET
         // -------------------------------------------------------------
         case 'settings_save':
             $stmt = $pdo->prepare("REPLACE INTO shop_settings (id, settings_json) VALUES (1, ?)");
@@ -358,6 +482,7 @@ try {
             http_response_code(400);
             echo json_encode(['error' => 'Geçersiz veya eksik action parametresi (örn: ?action=data)']);
             break;
+
     }
 } catch (Exception $e) {
     if ($pdo->inTransaction()) {

@@ -1,6 +1,7 @@
-import { DeviceType, TicketStatus, Priority, PaymentStatus, ServiceTicket } from '../types';
+import { DeviceType, TicketStatus, Priority, PaymentStatus, ServiceTicket, CurrentAccount, CurrentAccountTransaction } from '../types';
 
 export const formatCurrency = (amount: number): string => {
+
   return new Intl.NumberFormat('tr-TR', {
     style: 'currency',
     currency: 'TRY',
@@ -435,5 +436,59 @@ export const generateGroupWhatsAppLink = (
   const msg = generateJobCardText(ticket, shopName, groupName);
   return `https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`;
 };
+
+// CARİ HESAP EKSTRESİ & BAKİYE BİLGİLENDİRME WHATSAPP MESAJI
+export const generateCurrentAccountWhatsAppLink = (
+  account: CurrentAccount,
+  txs: CurrentAccountTransaction[],
+  shopName: string,
+  shopPhone: string
+): string => {
+  const cleanPhone = cleanPhoneForWhatsApp(account.phone);
+  const isSupplier = account.type === 'supplier';
+  
+  let balanceText = '';
+  if (account.balance > 0) {
+    balanceText = `${formatCurrency(account.balance)} (Firmamız Alacaklı)`;
+  } else if (account.balance < 0) {
+    balanceText = `${formatCurrency(Math.abs(account.balance))} (Firmamız Borçlu)`;
+  } else {
+    balanceText = `0,00 TL (Hesap Bakiyesi Kapalı)`;
+  }
+
+  // Son 5 hareketi listele
+  const recentTxs = [...txs]
+    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+    .slice(0, 5);
+
+  let movementsText = '';
+  if (recentTxs.length > 0) {
+    movementsText = recentTxs.map(t => {
+      const typeLabel = t.type === 'debit' ? (isSupplier ? 'Mal/Parça Alımı' : 'Hizmet Bedeli') : (isSupplier ? 'Ödeme Yapıldı' : 'Tahsilat Alındı');
+      const prefix = t.type === 'debit' ? '+' : '-';
+      return `• ${formatDateOnly(t.date)}: ${t.description} | ${prefix}${formatCurrency(t.amount)} (${typeLabel})`;
+    }).join('\n');
+  } else {
+    movementsText = '• Henüz kayıtlı işlem hareketi bulunmamaktadır.';
+  }
+
+  const msg = 
+    `📋 *${shopName.toUpperCase()} - CARİ HESAP EKSTRESİ* 📋\n\n` +
+    `🏢 *Cari Ünvanı:* ${account.name}\n` +
+    (account.authorizedPerson ? `👤 *Yetkili:* ${account.authorizedPerson}\n` : '') +
+    `📞 *Telefon:* ${account.phone}\n` +
+    `📅 *Ekstre Tarihi:* ${formatDate(new Date().toISOString())}\n\n` +
+    `📊 *GÜNCEL HESAP BAKİYESİ:* *${balanceText}*\n\n` +
+    `📝 *Son Hareketler (Özet):*\n${movementsText}\n\n` +
+    `📌 *Açıklama:* Detaylı hesap mutabakatı ve sorularınız için bizimle iletişime geçebilirsiniz.\n` +
+    `📞 *İletişim:* ${shopPhone}\n` +
+    `✨ *${shopName} İyi Çalışmalar Diler.*`;
+
+  if (cleanPhone) {
+    return `https://api.whatsapp.com/send?phone=${cleanPhone}&text=${encodeURIComponent(msg)}`;
+  }
+  return `https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`;
+};
+
 
 

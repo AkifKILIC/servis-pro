@@ -5,7 +5,9 @@ import {
   CashTransaction, 
   ShopSettings, 
   DeviceType, 
-  TicketStatus 
+  TicketStatus,
+  CurrentAccount,
+  CurrentAccountTransaction
 } from '../types';
 
 const STORAGE_KEYS = {
@@ -13,9 +15,12 @@ const STORAGE_KEYS = {
   TICKETS: 'servispro_tickets',
   PARTS: 'servispro_parts',
   CASH: 'servispro_cash',
+  CURRENT_ACCOUNTS: 'servispro_current_accounts',
+  CURRENT_TRANSACTIONS: 'servispro_current_transactions',
   SETTINGS: 'servispro_settings',
   THEME: 'servispro_theme',
 };
+
 
 // Varsayılan dükkan ayarları
 export const defaultSettings: ShopSettings = {
@@ -445,7 +450,96 @@ const initialCash: CashTransaction[] = [
   }
 ];
 
+export const initialCurrentAccounts: CurrentAccount[] = [
+  {
+    "id": "cari-top-1",
+    "name": "Ege Yedek Parça Toptan Ltd. Şti.",
+    "type": "supplier",
+    "phone": "0232 444 12 34",
+    "phone2": "0532 555 11 22",
+    "taxOrIdNumber": "3210987654",
+    "authorizedPerson": "Mustafa Bey (Toptan Satış)",
+    "city": "İzmir",
+    "district": "Konak",
+    "address": "Gıda Çarşısı 1204 Sok. No:18 Konak/İzmir",
+    "balance": -4850,
+    "creditLimit": 40000,
+    "notes": "Arçelik, Beko, Bosch orijinal ve yan sanayi pompa, rezistans, amortisör tedarikçimiz. Her ayın 15 inde hesap kesilir.",
+    "createdAt": "2026-09-01T09:00:00.000Z",
+    "updatedAt": "2026-09-20T14:30:00.000Z"
+  },
+  {
+    "id": "cari-top-2",
+    "name": "Buzpar Soğutma & Motor Sanayi",
+    "type": "supplier",
+    "phone": "0232 469 88 99",
+    "taxOrIdNumber": "1122334455",
+    "authorizedPerson": "Kadir Usta",
+    "city": "İzmir",
+    "district": "Bornova",
+    "address": "3. Sanayi Sitesi 402 Sok. No:5 Bornova/İzmir",
+    "balance": -1750,
+    "creditLimit": 25000,
+    "notes": "R600a/R134a soğutucu gaz tüpleri, Ebm fan motorları, defrost sensörleri",
+    "createdAt": "2026-09-05T10:00:00.000Z",
+    "updatedAt": "2026-09-18T16:00:00.000Z"
+  },
+  {
+    "id": "cari-top-3",
+    "name": "Merkez Elektronik Kart Tamir Atölyesi",
+    "type": "supplier",
+    "phone": "0535 999 88 77",
+    "authorizedPerson": "Serkan Usta",
+    "city": "İzmir",
+    "district": "Karabağlar",
+    "address": "İnönü Cad. No:114/B Karabağlar/İzmir",
+    "balance": 0,
+    "creditLimit": 15000,
+    "notes": "İnverter kart tamiri, eprom programlama ve çamaşır makinesi anakart onarımı",
+    "createdAt": "2026-09-10T11:00:00.000Z",
+    "updatedAt": "2026-09-21T18:00:00.000Z"
+  }
+];
+
+export const initialCurrentTransactions: CurrentAccountTransaction[] = [
+  {
+    "id": "ctx-1",
+    "accountId": "cari-top-1",
+    "accountName": "Ege Yedek Parça Toptan Ltd. Şti.",
+    "type": "debit",
+    "amount": 6350,
+    "date": "2026-09-15T10:00:00.000Z",
+    "description": "10 Adet Arçelik Pompa, 5 Adet Rezistans toptan parça alımı",
+    "documentNo": "FAT-2026-8841",
+    "createdAt": "2026-09-15T10:00:00.000Z"
+  },
+  {
+    "id": "ctx-2",
+    "accountId": "cari-top-1",
+    "accountName": "Ege Yedek Parça Toptan Ltd. Şti.",
+    "type": "credit",
+    "amount": 1500,
+    "date": "2026-09-16T15:30:00.000Z",
+    "description": "Banka havalesi ile ara cari ödeme yapıldı",
+    "documentNo": "DEK-99214",
+    "paymentMethod": "bank_transfer",
+    "createdAt": "2026-09-16T15:30:00.000Z"
+  },
+  {
+    "id": "ctx-3",
+    "accountId": "cari-top-2",
+    "accountName": "Buzpar Soğutma & Motor Sanayi",
+    "type": "debit",
+    "amount": 1750,
+    "date": "2026-09-18T11:20:00.000Z",
+    "description": "2 Adet R600a Gaz Tüpü ve Fan Motoru Alımı",
+    "documentNo": "IRS-2026-4401",
+    "createdAt": "2026-09-18T11:20:00.000Z"
+  }
+];
+
 class StorageService {
+
   // Müşteriler
   getCustomers(): Customer[] {
     const raw = localStorage.getItem(STORAGE_KEYS.CUSTOMERS);
@@ -683,6 +777,143 @@ class StorageService {
     return true;
   }
 
+  // Cari Hesaplar (Müşteriler & Tedarikçi/Toptancılar)
+  getCurrentAccounts(): CurrentAccount[] {
+    const raw = localStorage.getItem(STORAGE_KEYS.CURRENT_ACCOUNTS);
+    if (!raw) {
+      this.saveCurrentAccounts(initialCurrentAccounts);
+      return initialCurrentAccounts;
+    }
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return initialCurrentAccounts;
+    }
+  }
+
+  saveCurrentAccounts(accounts: CurrentAccount[]): void {
+    localStorage.setItem(STORAGE_KEYS.CURRENT_ACCOUNTS, JSON.stringify(accounts));
+  }
+
+  addCurrentAccount(data: Omit<CurrentAccount, 'id' | 'createdAt' | 'updatedAt' | 'balance'> & { initialBalance?: number }): CurrentAccount {
+    const accounts = this.getCurrentAccounts();
+    const initBal = Number(data.initialBalance) || 0;
+    const newAccount: CurrentAccount = {
+      ...data,
+      id: 'cari-' + (data.type === 'supplier' ? 'top-' : 'mus-') + Date.now(),
+      balance: initBal,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    delete (newAccount as any).initialBalance;
+    accounts.unshift(newAccount);
+    this.saveCurrentAccounts(accounts);
+
+    // Açılış bakiyesi varsa ilk hareket olarak kaydet
+    if (initBal !== 0) {
+      this.addCurrentTransaction({
+        accountId: newAccount.id,
+        accountName: newAccount.name,
+        type: initBal < 0 ? 'debit' : 'credit',
+        amount: Math.abs(initBal),
+        date: new Date().toISOString(),
+        description: 'Açılış Devir Bakiyesi',
+        documentNo: 'DEVİR',
+      });
+    }
+
+    return newAccount;
+  }
+
+  updateCurrentAccount(id: string, updates: Partial<CurrentAccount>): CurrentAccount | null {
+    const accounts = this.getCurrentAccounts();
+    const idx = accounts.findIndex(a => a.id === id);
+    if (idx === -1) return null;
+    accounts[idx] = { ...accounts[idx], ...updates, updatedAt: new Date().toISOString() };
+    this.saveCurrentAccounts(accounts);
+    return accounts[idx];
+  }
+
+  deleteCurrentAccount(id: string): boolean {
+    const accounts = this.getCurrentAccounts();
+    const filtered = accounts.filter(a => a.id !== id);
+    this.saveCurrentAccounts(filtered);
+    // İlişkili hareketleri de temizle
+    const txs = this.getCurrentTransactions().filter(t => t.accountId !== id);
+    this.saveCurrentTransactions(txs);
+    return true;
+  }
+
+  // Cari Hareketler
+  getCurrentTransactions(): CurrentAccountTransaction[] {
+    const raw = localStorage.getItem(STORAGE_KEYS.CURRENT_TRANSACTIONS);
+    if (!raw) {
+      this.saveCurrentTransactions(initialCurrentTransactions);
+      return initialCurrentTransactions;
+    }
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return initialCurrentTransactions;
+    }
+  }
+
+  saveCurrentTransactions(txs: CurrentAccountTransaction[]): void {
+    localStorage.setItem(STORAGE_KEYS.CURRENT_TRANSACTIONS, JSON.stringify(txs));
+  }
+
+  addCurrentTransaction(tx: Omit<CurrentAccountTransaction, 'id' | 'createdAt'>): CurrentAccountTransaction {
+    const txs = this.getCurrentTransactions();
+    const newTx: CurrentAccountTransaction = {
+      ...tx,
+      id: 'ctx-' + Date.now(),
+      createdAt: new Date().toISOString(),
+    };
+    txs.unshift(newTx);
+    this.saveCurrentTransactions(txs);
+
+    // Cari bakiyesini otomatik güncelle
+    this.recalculateAccountBalance(tx.accountId);
+    return newTx;
+  }
+
+  deleteCurrentTransaction(id: string): boolean {
+    const txs = this.getCurrentTransactions();
+    const targetTx = txs.find(t => t.id === id);
+    const filtered = txs.filter(t => t.id !== id);
+    this.saveCurrentTransactions(filtered);
+    if (targetTx) {
+      this.recalculateAccountBalance(targetTx.accountId);
+    }
+    return true;
+  }
+
+  recalculateAccountBalance(accountId: string): number {
+    const accounts = this.getCurrentAccounts();
+    const account = accounts.find(a => a.id === accountId);
+    if (!account) return 0;
+
+    const accountTxs = this.getCurrentTransactions().filter(t => t.accountId === accountId);
+    // Mantık:
+    // Eğer Tedarikçi ise (supplier): debit = mal aldık borcumuz arttı (-), credit = ödeme yaptık borcumuz azaldı (+)
+    // Eğer Müşteri ise (customer): debit = hizmet/parça verdik alacağımız arttı (+), credit = tahsilat aldık alacağımız azaldı (-)
+    let calculatedBalance = 0;
+    if (account.type === 'supplier') {
+      accountTxs.forEach(t => {
+        if (t.type === 'debit') calculatedBalance -= t.amount;
+        else if (t.type === 'credit') calculatedBalance += t.amount;
+      });
+    } else {
+      accountTxs.forEach(t => {
+        if (t.type === 'debit') calculatedBalance += t.amount;
+        else if (t.type === 'credit') calculatedBalance -= t.amount;
+      });
+    }
+
+    this.updateCurrentAccount(accountId, { balance: calculatedBalance });
+    return calculatedBalance;
+  }
+
   // Ayarlar
   getSettings(): ShopSettings {
     const raw = localStorage.getItem(STORAGE_KEYS.SETTINGS);
@@ -714,12 +945,14 @@ class StorageService {
   // Tam Yedekleme (Dışa Aktarma & İçe Aktarma)
   exportFullBackup(): string {
     const backup = {
-      version: '1.0',
+      version: '1.1',
       exportedAt: new Date().toISOString(),
       customers: this.getCustomers(),
       tickets: this.getTickets(),
       parts: this.getParts(),
       cash: this.getCashTransactions(),
+      currentAccounts: this.getCurrentAccounts(),
+      currentTransactions: this.getCurrentTransactions(),
       settings: this.getSettings(),
     };
     return JSON.stringify(backup, null, 2);
@@ -732,6 +965,8 @@ class StorageService {
       if (data.tickets) this.saveTickets(data.tickets);
       if (data.parts) this.saveParts(data.parts);
       if (data.cash) this.saveCashTransactions(data.cash);
+      if (data.currentAccounts) this.saveCurrentAccounts(data.currentAccounts);
+      if (data.currentTransactions) this.saveCurrentTransactions(data.currentTransactions);
       if (data.settings) this.saveSettings(data.settings);
       return true;
     } catch (e) {
@@ -746,8 +981,11 @@ class StorageService {
     this.saveTickets(initialTickets);
     this.saveParts(initialParts);
     this.saveCashTransactions(initialCash);
+    this.saveCurrentAccounts(initialCurrentAccounts);
+    this.saveCurrentTransactions(initialCurrentTransactions);
     this.saveSettings(defaultSettings);
   }
 }
+
 
 export const storage = new StorageService();

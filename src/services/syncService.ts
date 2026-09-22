@@ -1,4 +1,4 @@
-import { ServiceTicket, Customer, SparePart, CashTransaction, ShopSettings } from '../types';
+import { ServiceTicket, Customer, SparePart, CashTransaction, ShopSettings, CurrentAccount, CurrentAccountTransaction } from '../types';
 import { storage } from './storage';
 
 type SyncCallback = (event: { type: string; data: any }) => void;
@@ -25,10 +25,11 @@ export const getMySqlApiUrl = () => {
 
 export interface OfflineMutation {
   id: string;
-  action: 'ticket_save' | 'ticket_delete' | 'customer_save' | 'customer_delete' | 'part_save' | 'part_delete' | 'cash_save' | 'cash_delete' | 'settings_save';
+  action: 'ticket_save' | 'ticket_delete' | 'customer_save' | 'customer_delete' | 'part_save' | 'part_delete' | 'cash_save' | 'cash_delete' | 'current_account_save' | 'current_account_delete' | 'current_tx_save' | 'current_tx_delete' | 'settings_save';
   data: any;
   timestamp: number;
 }
+
 
 export type ConnectionState = 'online' | 'offline' | 'syncing';
 
@@ -604,6 +605,12 @@ class SyncService {
         if (fresh.cash && Array.isArray(fresh.cash)) {
           storage.saveCashTransactions(fresh.cash);
         }
+        if (fresh.currentAccounts && Array.isArray(fresh.currentAccounts)) {
+          storage.saveCurrentAccounts(fresh.currentAccounts);
+        }
+        if (fresh.currentTransactions && Array.isArray(fresh.currentTransactions)) {
+          storage.saveCurrentTransactions(fresh.currentTransactions);
+        }
         if (fresh.settings && typeof fresh.settings === 'object') {
           storage.saveSettings(fresh.settings);
         }
@@ -656,9 +663,26 @@ class SyncService {
     return this.executeMutation('cash_delete', { id }, id);
   }
 
+  async saveCurrentAccountToSql(ca: CurrentAccount): Promise<boolean> {
+    return this.executeMutation('current_account_save', ca, ca.id);
+  }
+
+  async deleteCurrentAccountFromSql(id: string): Promise<boolean> {
+    return this.executeMutation('current_account_delete', { id }, id);
+  }
+
+  async saveCurrentTxToSql(ctx: CurrentAccountTransaction): Promise<boolean> {
+    return this.executeMutation('current_tx_save', ctx, ctx.id);
+  }
+
+  async deleteCurrentTxFromSql(id: string): Promise<boolean> {
+    return this.executeMutation('current_tx_delete', { id }, id);
+  }
+
   async saveSettingsToSql(settings: ShopSettings): Promise<boolean> {
     return this.executeMutation('settings_save', settings, 'settings_1');
   }
+
 
 
   // Saha ustasının iPhone'dan hızlı tekil güncellemesi (Vercel Üzerinden Anında Ofise Ulaşır)

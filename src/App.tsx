@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { storage } from './services/storage';
 import { syncService } from './services/syncService';
-import { ServiceTicket, Customer, SparePart, CashTransaction, ShopSettings } from './types';
+import { ServiceTicket, Customer, SparePart, CashTransaction, ShopSettings, CurrentAccount, CurrentAccountTransaction } from './types';
 import { Sidebar } from './components/Sidebar';
 import { Navbar } from './components/Navbar';
 import { Dashboard } from './components/Dashboard';
@@ -55,7 +55,10 @@ export const App: React.FC = () => {
   const [customers, setCustomers] = useState<Customer[]>(storage.getCustomers());
   const [parts, setParts] = useState<SparePart[]>(storage.getParts());
   const [transactions, setTransactions] = useState<CashTransaction[]>(storage.getCashTransactions());
+  const [currentAccounts, setCurrentAccounts] = useState<CurrentAccount[]>(storage.getCurrentAccounts());
+  const [currentTransactions, setCurrentTransactions] = useState<CurrentAccountTransaction[]>(storage.getCurrentTransactions());
   const [settings, setSettings] = useState<ShopSettings>(storage.getSettings());
+
 
   // Modallar
   const [isTicketModalOpen, setIsTicketModalOpen] = useState(false);
@@ -127,6 +130,14 @@ export const App: React.FC = () => {
           setTransactions(serverData.cash);
           storage.saveCashTransactions(serverData.cash);
         }
+        if (serverData.currentAccounts && Array.isArray(serverData.currentAccounts)) {
+          setCurrentAccounts(serverData.currentAccounts);
+          storage.saveCurrentAccounts(serverData.currentAccounts);
+        }
+        if (serverData.currentTransactions && Array.isArray(serverData.currentTransactions)) {
+          setCurrentTransactions(serverData.currentTransactions);
+          storage.saveCurrentTransactions(serverData.currentTransactions);
+        }
       } else {
         // Sunucu henüz boşsa yerel veriyi sunucuya gönder
         syncService.pushFullSync({
@@ -134,10 +145,13 @@ export const App: React.FC = () => {
           customers: storage.getCustomers(),
           parts: storage.getParts(),
           cash: storage.getCashTransactions(),
+          currentAccounts: storage.getCurrentAccounts(),
+          currentTransactions: storage.getCurrentTransactions(),
           settings: storage.getSettings(),
         });
       }
     });
+
 
     // Canlı Olayları Dinle
     const unsubscribe = syncService.subscribe((event) => {
@@ -585,6 +599,80 @@ export const App: React.FC = () => {
     setTransactions(storage.getCashTransactions());
   };
 
+  // Cari Hesap İşlemleri
+  const handleAddCurrentAccount = (caData: Omit<CurrentAccount, 'id' | 'createdAt' | 'updatedAt' | 'balance'> & { initialBalance?: number }) => {
+    const newAccount = storage.addCurrentAccount(caData);
+    syncService.saveCurrentAccountToSql(newAccount);
+    setCurrentAccounts(storage.getCurrentAccounts());
+    setCurrentTransactions(storage.getCurrentTransactions());
+  };
+
+  const handleUpdateCurrentAccount = (id: string, updates: Partial<CurrentAccount>) => {
+    const updated = storage.updateCurrentAccount(id, updates);
+    if (updated) {
+      syncService.saveCurrentAccountToSql(updated);
+      setCurrentAccounts(storage.getCurrentAccounts());
+    }
+  };
+
+  const handleDeleteCurrentAccount = (id: string) => {
+    storage.deleteCurrentAccount(id);
+    syncService.deleteCurrentAccountFromSql(id);
+    setCurrentAccounts(storage.getCurrentAccounts());
+    setCurrentTransactions(storage.getCurrentTransactions());
+  };
+
+  const handleAddCurrentTransaction = (
+    ctxData: Omit<CurrentAccountTransaction, 'id' | 'createdAt'>, 
+    alsoCreateCashTx: boolean = true
+  ) => {
+    const newTx = storage.addCurrentTransaction(ctxData);
+    syncService.saveCurrentTxToSql(newTx);
+
+    // İsteğe bağlı olarak Kasa Tablosuna da Gelir/Gider ekle
+    if (alsoCreateCashTx) {
+      const account = storage.getCurrentAccounts().find(a => a.id === ctxData.accountId);
+      const isSupplier = account?.type === 'supplier';
+      // Tedarikçiye ödeme yaptıysak (credit) -> Gider
+      // Müşteriden tahsilat aldıysak (credit) -> Gelir
+      const cashType: 'income' | 'expense' = isSupplier
+        ? (ctxData.type === 'credit' ? 'expense' : 'income')
+        : (ctxData.type === 'credit' ? 'income' : 'expense');
+
+      const cashTx = storage.addCashTransaction({
+        type: cashType,
+        category: isSupplier ? 'Toptancı Cari Ödeme' : 'Müşteri Cari Tahsilat',
+        amount: ctxData.amount,
+        date: ctxData.date || new Date().toISOString(),
+        description: `${ctxData.accountName} - ${ctxData.description}`,
+        paymentMethod: ctxData.paymentMethod || 'cash',
+      });
+      syncService.saveCashToSql(cashTx);
+      setTransactions(storage.getCashTransactions());
+    }
+
+    const updatedAccount = storage.getCurrentAccounts().find(a => a.id === ctxData.accountId);
+    if (updatedAccount) {
+      syncService.saveCurrentAccountToSql(updatedAccount);
+    }
+    setCurrentAccounts(storage.getCurrentAccounts());
+    setCurrentTransactions(storage.getCurrentTransactions());
+  };
+
+  const handleDeleteCurrentTransaction = (id: string) => {
+    const target = storage.getCurrentTransactions().find(t => t.id === id);
+    storage.deleteCurrentTransaction(id);
+    syncService.deleteCurrentTxFromSql(id);
+    if (target) {
+      const updatedAccount = storage.getCurrentAccounts().find(a => a.id === target.accountId);
+      if (updatedAccount) {
+        syncService.saveCurrentAccountToSql(updatedAccount);
+      }
+    }
+    setCurrentAccounts(storage.getCurrentAccounts());
+    setCurrentTransactions(storage.getCurrentTransactions());
+  };
+
   // Ayarlar
   const handleSaveSettings = (newSettings: ShopSettings) => {
     storage.saveSettings(newSettings);
@@ -598,8 +686,11 @@ export const App: React.FC = () => {
     setCustomers(storage.getCustomers());
     setParts(storage.getParts());
     setTransactions(storage.getCashTransactions());
+    setCurrentAccounts(storage.getCurrentAccounts());
+    setCurrentTransactions(storage.getCurrentTransactions());
     setSettings(storage.getSettings());
   };
+
 
   // Sayaçlar
   const pendingCount = tickets.filter(t => t.status !== 'delivered' && t.status !== 'cancelled').length;
@@ -800,8 +891,18 @@ export const App: React.FC = () => {
             transactions={transactions}
             onAddTransaction={handleAddTransaction}
             onDeleteTransaction={handleDeleteTransaction}
+            currentAccounts={currentAccounts}
+            onAddCurrentAccount={handleAddCurrentAccount}
+            onUpdateCurrentAccount={handleUpdateCurrentAccount}
+            onDeleteCurrentAccount={handleDeleteCurrentAccount}
+            currentTransactions={currentTransactions}
+            onAddCurrentTransaction={handleAddCurrentTransaction}
+            onDeleteCurrentTransaction={handleDeleteCurrentTransaction}
+            shopName={settings.shopName}
+            shopPhone={settings.phone}
           />
         )}
+
 
         {activeTab === 'settings' && (
           <SettingsView 

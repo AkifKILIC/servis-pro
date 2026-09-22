@@ -101,15 +101,61 @@ export interface SparePart {
   updatedAt: string;
 }
 
+export type CurrentAccountType = 'customer' | 'supplier' | 'other';
+
+export interface CurrentAccount {
+  id: string;
+  name: string;                   // Müşteri Adı veya Tedarikçi / Toptancı Şirket Ünvanı
+  type: CurrentAccountType;       // customer: Müşteri, supplier: Toptancı/Yedek Parçacı, other: Diğer
+  phone: string;
+  phone2?: string;
+  email?: string;
+  taxOrIdNumber?: string;         // Vergi No veya TC Kimlik
+  authorizedPerson?: string;      // Firma Yetkilisi / Muhatap
+  city: string;
+  district: string;
+  address?: string;
+  balance: number;                // Pozitif (+) = Alacaklıyız (Para alacağız), Negatif (-) = Borçluyuz (Para ödeyeceğiz)
+  creditLimit?: number;           // Kredi / Açık Hesap Limiti
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CurrentAccountTransaction {
+  id: string;
+  accountId: string;              // Bağlı olduğu Cari Hesap ID
+  accountName: string;            // Cari Ünvanı
+  type: 'debit' | 'credit';       // debit: Borç (Alacaklandığımız durum - Mal/Hizmet verdik), credit: Alacak (Tahsilat yaptık veya Borç ödedik)
+  amount: number;
+  date: string;
+  description: string;
+  documentNo?: string;            // Fatura No / Makbuz No / İrsaliye No
+  paymentMethod?: PaymentMethod;
+  relatedTicketId?: string;       // İlgili Servis Fişi ID
+  relatedCashTxId?: string;       // İlgili Kasa Hareketi ID
+  createdAt: string;
+}
+
+export interface CashAccount {
+  id: string;
+  name: string;
+  type: 'cash' | 'bank' | 'pos' | 'technician';
+  balance: number;
+  accountNumber?: string;         // IBAN veya Kasa Kodu
+}
+
 export interface CashTransaction {
   id: string;
-  type: 'income' | 'expense';
-  category: string;             // Servis Tahsilatı, Yedek Parça Alımı, Dükkan Kirası, Benzin, Faturalar vb.
+  type: 'income' | 'expense' | 'transfer';
+  category: string;             // Servis Tahsilatı, Yedek Parça Alımı, Dükkan Kirası, Benzin, Faturalar, Hesaplar Arası Virman vb.
   amount: number;
   date: string;
   description: string;
   relatedTicketId?: string;
   paymentMethod: PaymentMethod;
+  accountId?: string;           // Kaynak Kasa/Hesap
+  targetAccountId?: string;     // Hedef Kasa/Hesap (Virman / Transfer durumunda)
 }
 
 export interface ShopSettings {
@@ -125,3 +171,4 @@ export interface ShopSettings {
   warrantyTerms: string;
   receiptFooterNote: string;
 }
+
