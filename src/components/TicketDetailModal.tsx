@@ -193,6 +193,16 @@ export const TicketDetailModal: React.FC<TicketDetailModalProps> = ({
     } catch {}
   };
 
+  // Saha Tahsilat Bildirimi (Ofis Onayı Beklet)
+  const handleMarkAsPendingApproval = () => {
+    onUpdateTicket(ticket.id, {
+      paymentStatus: 'pending_approval',
+      paymentMethod: payMethod,
+      paidAmount: ticket.totalAmount,
+      updatedAt: new Date().toISOString(),
+    });
+  };
+
   const statusConfig = ticketStatusConfig[ticket.status];
   const priorityInfo = priorityConfig[ticket.priority];
   const paymentInfo = paymentStatusConfig[ticket.paymentStatus];
@@ -714,17 +724,33 @@ export const TicketDetailModal: React.FC<TicketDetailModalProps> = ({
                     </div>
                   </div>
                 ) : (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
                     <select 
                       className="form-control"
-                      style={{ width: 'auto' }}
+                      style={{ width: 'auto', minWidth: '130px' }}
                       value={payMethod}
                       onChange={e => setPayMethod(e.target.value as PaymentMethod)}
                     >
-                      <option value="cash">Nakit</option>
-                      <option value="credit_card">Kredi Kartı / POS</option>
-                      <option value="bank_transfer">Havale / EFT</option>
+                      <option value="cash">💵 Nakit</option>
+                      <option value="credit_card">💳 Kredi Kartı / POS</option>
+                      <option value="bank_transfer">🏦 Havale / EFT</option>
                     </select>
+
+                    <button 
+                      type="button" 
+                      className="btn btn-secondary"
+                      style={{ 
+                        background: 'rgba(245, 158, 11, 0.15)', 
+                        color: '#f59e0b', 
+                        borderColor: '#f59e0b',
+                        fontWeight: 700 
+                      }}
+                      onClick={handleMarkAsPendingApproval}
+                      title="Saha tahsilatı olarak işaretle ve ofis onayına gönder"
+                    >
+                      <Clock size={16} />
+                      <span>⏳ Saha Tahsilatı Bildir (Onay Beklet)</span>
+                    </button>
 
                     <button 
                       type="button" 
@@ -738,7 +764,7 @@ export const TicketDetailModal: React.FC<TicketDetailModalProps> = ({
                       }}
                     >
                       <Banknote size={16} />
-                      <span>Tahsilatı Tamamla</span>
+                      <span>✅ Doğrudan Kasaya Tahsil Et</span>
                     </button>
                   </div>
                 )}

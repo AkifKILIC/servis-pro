@@ -183,6 +183,14 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
   const [repairPartPrice, setRepairPartPrice] = useState('0');
   const [repairLaborPrice, setRepairLaborPrice] = useState('600');
   const [repairStatus, setRepairStatus] = useState<'in_repair' | 'waiting_parts' | 'ready'>('in_repair');
+  const [isJobAcceptedPayCollected, setIsJobAcceptedPayCollected] = useState(false);
+  const [jobAcceptedPayMethod, setJobAcceptedPayMethod] = useState<PaymentMethod>('cash');
+
+  // Hızlı Tahsilat Modalı (Saha Ustası Tek Tıkla Ücret Tahsil Eder ve Ofis Onayına Gönderir)
+  const [isQuickPayModalOpen, setIsQuickPayModalOpen] = useState(false);
+  const [quickPayAmount, setQuickPayAmount] = useState('0');
+  const [quickPayMethod, setQuickPayMethod] = useState<PaymentMethod>('cash');
+  const [quickPayNote, setQuickPayNote] = useState('Saha ustası tarafından ücret tahsil edildi.');
 
   // Yerel Saat Dilimine Göre Bugünün Tarihi (YYYY-MM-DD)
   const todayStr = getLocalDateString();
@@ -215,14 +223,14 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
     });
   };
 
-  // 1. Bugünün ve Dünden Devreden Açık Servisleri (Yeni açılanlar üstte, onarımda/parça bekleyenler altta)
-  const todayTickets = sortTicketsForTechnician(tickets.filter(t => isTodayTicket(t, todayStr)));
+  // 1. Bugünün ve Dünden Devreden Açık Servisleri (Yeni açılanlar üstte, onarımda/parça bekleyenler altta. Tahsilatı yapılanlar ustanın ekranından düşer)
+  const todayTickets = sortTicketsForTechnician(tickets.filter(t => isTodayTicket(t, todayStr) && t.paymentStatus !== 'pending_approval'));
 
   // 2. İleri Tarihli Randevular
-  const upcomingTickets = sortTicketsForTechnician(tickets.filter(t => isUpcomingTicket(t, todayStr)));
+  const upcomingTickets = sortTicketsForTechnician(tickets.filter(t => isUpcomingTicket(t, todayStr) && t.paymentStatus !== 'pending_approval'));
 
-  // 3. Tamamlanan & Tahsil Edilenler: Hem teslim edilmiş hem de tahsilatı tamamlanmış arşiv kayıtları
-  const completedTickets = tickets.filter(t => isTicketCompleted(t));
+  // 3. Tamamlanan & Tahsil Edilenler: Hem teslim edilmiş hem de ofis onayına gönderilmiş arşiv kayıtları
+  const completedTickets = tickets.filter(t => isTicketCompleted(t) || t.paymentStatus === 'pending_approval');
 
 
   // 4. Acil Servisler (Bugünün acilleri)
@@ -401,7 +409,7 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
     setSelectedTicket(null);
   };
 
-  // 2. İş Alındı / Onarım Başladı İşlemi
+  // 2. İş Alındı / Onarım Başladı İşlemi (Ve İsteğe Bağlı Sahada Tahsilat)
   const handleConfirmJobAccepted = () => {
     if (!selectedTicket) return;
     const partCost = parseFloat(repairPartPrice) || 0;
@@ -422,18 +430,48 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
       ];
     }
 
+    const finalStatus = isJobAcceptedPayCollected 
+      ? (repairStatus === 'waiting_parts' ? 'waiting_parts' : 'delivered')
+      : repairStatus;
+
     onUpdateTicket(selectedTicket.id, {
       ticketNumber: selectedTicket.ticketNumber,
       customerName: selectedTicket.customerName,
-      status: repairStatus,
+      status: finalStatus,
       technicianDiagnosis: repairDiagnosis.trim() || 'Arıza tespit edildi, onarıma başlandı.',
       partsUsed: updatedParts,
       laborCost: laborCost,
       totalAmount: total,
+      paymentStatus: isJobAcceptedPayCollected ? 'pending_approval' : selectedTicket.paymentStatus,
+      paidAmount: isJobAcceptedPayCollected ? total : selectedTicket.paidAmount,
+      paymentMethod: isJobAcceptedPayCollected ? jobAcceptedPayMethod : selectedTicket.paymentMethod,
+      completedAt: isJobAcceptedPayCollected ? new Date().toISOString() : selectedTicket.completedAt,
       updatedAt: new Date().toISOString(),
     });
 
     setIsJobAcceptedModalOpen(false);
+    setSelectedTicket(null);
+  };
+
+  // 3. Doğrudan Hızlı Tahsilat Yap (Saha Ustası Ücreti Aldı -> Ofis Onayına Gönderir)
+  const handleConfirmQuickPay = () => {
+    if (!selectedTicket) return;
+    const amount = parseFloat(quickPayAmount) || selectedTicket.totalAmount || 0;
+
+    onUpdateTicket(selectedTicket.id, {
+      ticketNumber: selectedTicket.ticketNumber,
+      customerName: selectedTicket.customerName,
+      status: 'delivered',
+      totalAmount: amount > 0 ? amount : selectedTicket.totalAmount,
+      paidAmount: amount,
+      paymentStatus: 'pending_approval',
+      paymentMethod: quickPayMethod,
+      technicianDiagnosis: quickPayNote.trim() || selectedTicket.technicianDiagnosis || 'Onarım tamamlandı, ücret sahada tahsil edildi.',
+      completedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    setIsQuickPayModalOpen(false);
     setSelectedTicket(null);
   };
 
@@ -1003,7 +1041,34 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
                 </button>
 
                 {/* Technician Quick Result Actions (Hızlı 1-Tık Butonları) */}
-                <div style={{ borderTop: '1px dashed var(--border-subtle)', paddingTop: '10px' }}>
+                <div style={{ borderTop: '1px dashed var(--border-subtle)', paddingTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {ticket.paymentStatus !== 'paid' && ticket.paymentStatus !== 'pending_approval' && (
+                    <button 
+                      type="button"
+                      className="btn btn-success"
+                      style={{ 
+                        width: '100%',
+                        padding: '11px',
+                        fontSize: '0.88rem',
+                        fontWeight: 800,
+                        background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                        boxShadow: '0 3px 10px rgba(16, 185, 129, 0.3)',
+                        borderRadius: '10px',
+                        justifyContent: 'center',
+                        gap: '6px'
+                      }}
+                      onClick={() => {
+                        setSelectedTicket(ticket);
+                        setQuickPayAmount(ticket.totalAmount > 0 ? ticket.totalAmount.toString() : '500');
+                        setQuickPayMethod(ticket.paymentMethod || 'cash');
+                        setIsQuickPayModalOpen(true);
+                      }}
+                    >
+                      <CheckCircle2 size={16} />
+                      <span>💰 Ücreti Tahsil Et (Ofis Onayına Gönder)</span>
+                    </button>
+                  )}
+
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
                     <button 
                       type="button"
@@ -1025,6 +1090,9 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
                       onClick={() => {
                         setSelectedTicket(ticket);
                         setRepairDiagnosis(ticket.technicianDiagnosis || '');
+                        setRepairPartPrice('0');
+                        setRepairLaborPrice(ticket.laborCost ? ticket.laborCost.toString() : '600');
+                        setIsJobAcceptedPayCollected(false);
                         setIsJobAcceptedModalOpen(true);
                       }}
                     >
@@ -1681,6 +1749,38 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
                   {formatCurrency((parseFloat(repairPartPrice) || 0) + (parseFloat(repairLaborPrice) || 0))}
                 </strong>
               </div>
+
+              {/* Saha Tahsilat Onayı Seçeneği */}
+              <div style={{ background: 'rgba(245, 158, 11, 0.12)', border: '1px solid rgba(245, 158, 11, 0.35)', borderRadius: '12px', padding: '12px' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', margin: 0, fontWeight: 700, color: '#f59e0b', fontSize: '0.9rem' }}>
+                  <input 
+                    type="checkbox" 
+                    checked={isJobAcceptedPayCollected}
+                    onChange={e => setIsJobAcceptedPayCollected(e.target.checked)}
+                    style={{ width: '18px', height: '18px', accentColor: '#f59e0b' }}
+                  />
+                  <span>💰 Ücret Müşteriden Alındı (Ofis Onayına Gönder)</span>
+                </label>
+
+                {isJobAcceptedPayCollected && (
+                  <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px dashed rgba(245, 158, 11, 0.3)' }}>
+                    <label className="form-label" style={{ fontSize: '0.82rem', fontWeight: 600 }}>Ödeme Yöntemi:</label>
+                    <select 
+                      className="form-control"
+                      style={{ height: '40px', fontSize: '0.88rem' }}
+                      value={jobAcceptedPayMethod}
+                      onChange={e => setJobAcceptedPayMethod(e.target.value as any)}
+                    >
+                      <option value="cash">💵 Nakit</option>
+                      <option value="credit_card">💳 Kredi Kartı / POS</option>
+                      <option value="bank_transfer">🏦 IBAN / Havale</option>
+                    </select>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block', marginTop: '4px' }}>
+                      ℹ️ Tahsilatı aldığınızda iş listenizden düşer ve ofis ekranında onay bekleyenlere iletilir.
+                    </span>
+                  </div>
+                )}
+              </div>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '16px', paddingTop: '12px', borderTop: '1px solid var(--border-subtle)' }}>
@@ -1698,6 +1798,104 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
                 className="btn btn-secondary" 
                 style={{ width: '100%', height: '42px', fontSize: '0.88rem', justifyContent: 'center', borderRadius: '10px' }}
                 onClick={() => setIsJobAcceptedModalOpen(false)}
+              >
+                Vazgeç
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 3: DOĞRUDAN HIZLI TAHSİLAT AL & OFİS ONAYINA GÖNDER */}
+      {isQuickPayModalOpen && selectedTicket && (
+        <div className="modal-overlay" onClick={() => setIsQuickPayModalOpen(false)} style={{ padding: '10px' }}>
+          <div className="modal-box" onClick={e => e.stopPropagation()} style={{ maxWidth: '440px', width: '100%', borderRadius: '18px', padding: '18px' }}>
+            <div className="modal-header" style={{ padding: '0 0 12px 0', marginBottom: '14px', borderBottom: '1px solid var(--border-subtle)' }}>
+              <div>
+                <h3 style={{ color: '#10b981', fontSize: '1.2rem', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <DollarSign size={20} />
+                  <span>Saha Tahsilat Girişi</span>
+                </h3>
+                <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
+                  {selectedTicket.ticketNumber} - {selectedTicket.customerName}
+                </p>
+              </div>
+              <button className="close-btn" onClick={() => setIsQuickPayModalOpen(false)}>
+                <X size={20} />
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label" style={{ fontWeight: 700 }}>Tahsil Edilen Tutar (TL) *</label>
+                <input 
+                  type="number" 
+                  className="form-control" 
+                  style={{ height: '48px', fontSize: '1.3rem', fontWeight: 800, color: '#10b981', borderRadius: '10px' }}
+                  value={quickPayAmount}
+                  onChange={e => setQuickPayAmount(e.target.value)}
+                  placeholder="0"
+                />
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label" style={{ fontWeight: 600 }}>Ödeme Yöntemi</label>
+                <select 
+                  className="form-control"
+                  style={{ height: '44px', fontSize: '0.92rem', borderRadius: '10px' }}
+                  value={quickPayMethod}
+                  onChange={e => setQuickPayMethod(e.target.value as any)}
+                >
+                  <option value="cash">💵 Nakit</option>
+                  <option value="credit_card">💳 Kredi Kartı / Mobil POS</option>
+                  <option value="bank_transfer">🏦 IBAN / Havale</option>
+                </select>
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label" style={{ fontWeight: 600 }}>Teknisyen Tahsilat Notu</label>
+                <input 
+                  type="text" 
+                  className="form-control" 
+                  style={{ height: '44px', fontSize: '0.9rem', borderRadius: '10px' }}
+                  value={quickPayNote}
+                  onChange={e => setQuickPayNote(e.target.value)}
+                  placeholder="Örn: Cihaz teslim edildi, ücret elden nakit alındı."
+                />
+              </div>
+
+              <div style={{ background: 'rgba(16, 185, 129, 0.12)', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: '10px', padding: '10px 12px' }}>
+                <span style={{ fontSize: '0.78rem', color: '#10b981', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600 }}>
+                  <CheckCircle2 size={16} />
+                  <span>Bu işlemden sonra fiş ekranınızdan düşecek ve ofis onayına gidecektir.</span>
+                </span>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '16px', paddingTop: '12px', borderTop: '1px solid var(--border-subtle)' }}>
+              <button 
+                type="button" 
+                className="btn btn-success" 
+                style={{ 
+                  width: '100%', 
+                  height: '48px', 
+                  fontSize: '0.98rem', 
+                  fontWeight: 900, 
+                  justifyContent: 'center', 
+                  borderRadius: '12px',
+                  background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                  boxShadow: '0 4px 14px rgba(16, 185, 129, 0.35)'
+                }}
+                onClick={handleConfirmQuickPay}
+              >
+                <CheckCircle2 size={18} />
+                <span>Tahsilatı Kaydet & Ofis Onayına Gönder</span>
+              </button>
+              <button 
+                type="button" 
+                className="btn btn-secondary" 
+                style={{ width: '100%', height: '42px', fontSize: '0.88rem', justifyContent: 'center', borderRadius: '10px' }}
+                onClick={() => setIsQuickPayModalOpen(false)}
               >
                 Vazgeç
               </button>

@@ -49,9 +49,9 @@ export const getLocalDateString = (d: Date = new Date()): string => {
 
 export const isTicketCompleted = (t: ServiceTicket): boolean => {
   if (t.status === 'cancelled') return false;
-  // Teslim edilmiş veya hazır olup, ödemesi tam tahsil edilmiş veya ofis onayı bekleyenler ustanın aktif listesinden tamamlandı sayılır
+  // Teslim edilmiş veya hazır olup, ödemesi ofis tarafından onaylanmış (paid) olanlar tamamen tamamlanmış sayılır
   const isFinished = t.status === 'delivered' || t.status === 'ready';
-  const isPaid = t.paymentStatus === 'paid' || t.paymentStatus === 'pending_approval' || (t.totalAmount === 0 && t.paidAmount === 0);
+  const isPaid = t.paymentStatus === 'paid' || (t.totalAmount === 0 && t.paidAmount === 0);
   return isFinished && isPaid;
 };
 
