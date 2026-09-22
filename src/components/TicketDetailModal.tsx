@@ -50,6 +50,7 @@ interface TicketDetailModalProps {
   onDeleteTicket: (id: string) => void;
   onPrintTicket: (ticket: ServiceTicket) => void;
   onEditTicket: (ticket: ServiceTicket) => void;
+  onApprovePayment?: (ticketId: string) => void;
   shopName: string;
   shopPhone: string;
 }
@@ -63,6 +64,7 @@ export const TicketDetailModal: React.FC<TicketDetailModalProps> = ({
   onDeleteTicket,
   onPrintTicket,
   onEditTicket,
+  onApprovePayment,
   shopName,
   shopPhone,
 }) => {
@@ -610,7 +612,7 @@ export const TicketDetailModal: React.FC<TicketDetailModalProps> = ({
           <div className="card" style={{ padding: '16px', background: 'rgba(255, 255, 255, 0.02)' }}>
             <h4 style={{ fontSize: '0.95rem', fontWeight: 700, marginBottom: '14px' }}>Maliyet ve Hesap Dökümü</h4>
             
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px', marginBottom: '16px' }}>
+            <div className="cost-inputs-grid" style={{ marginBottom: '16px' }}>
               <div className="form-group" style={{ marginBottom: 0 }}>
                 <label className="form-label">İşçilik Bedeli (TL)</label>
                 <input 
@@ -658,7 +660,50 @@ export const TicketDetailModal: React.FC<TicketDetailModalProps> = ({
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                {ticket.paymentStatus === 'paid' ? (
+                {ticket.paymentStatus === 'pending_approval' ? (
+                  <div style={{ 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    flexWrap: 'wrap',
+                    gap: '12px',
+                    background: 'rgba(245, 158, 11, 0.14)',
+                    border: '1px solid rgba(245, 158, 11, 0.35)',
+                    borderRadius: '12px',
+                    padding: '8px 14px'
+                  }}>
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span style={{ fontSize: '0.9rem', fontWeight: 800, color: '#f59e0b' }}>
+                          ⏳ Saha Tahsilatı: {formatCurrency(ticket.paidAmount || ticket.totalAmount)}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>
+                        Yöntem: {ticket.paymentMethod === 'cash' ? 'Nakit' : ticket.paymentMethod === 'credit_card' ? 'Kredi Kartı' : 'Havale'} • Ofis Onayı Bekliyor
+                      </div>
+                    </div>
+                    <button 
+                      type="button" 
+                      className="btn btn-primary"
+                      style={{ 
+                        background: 'linear-gradient(135deg, #10b981, #059669)', 
+                        border: 'none', 
+                        fontWeight: 800,
+                        padding: '9px 14px',
+                        boxShadow: '0 2px 8px rgba(16, 185, 129, 0.35)'
+                      }}
+                      onClick={() => {
+                        if (onApprovePayment) {
+                          onApprovePayment(ticket.id);
+                        } else {
+                          handleMarkAsPaid();
+                        }
+                      }}
+                    >
+                      <CheckCircle2 size={16} />
+                      <span>Tahsilatı Onayla & Kasaya İşle</span>
+                    </button>
+                  </div>
+                ) : ticket.paymentStatus === 'paid' ? (
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--emerald)' }}>
                     <CheckCircle2 size={24} />
                     <div>
@@ -684,7 +729,13 @@ export const TicketDetailModal: React.FC<TicketDetailModalProps> = ({
                     <button 
                       type="button" 
                       className="btn btn-primary"
-                      onClick={handleMarkAsPaid}
+                      onClick={() => {
+                        if (onApprovePayment) {
+                          onApprovePayment(ticket.id);
+                        } else {
+                          handleMarkAsPaid();
+                        }
+                      }}
                     >
                       <Banknote size={16} />
                       <span>Tahsilatı Tamamla</span>

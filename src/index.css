@@ -721,9 +721,38 @@ textarea.form-control {
   gap: 16px;
 }
 
+.cost-inputs-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+}
+
 @media (max-width: 600px) {
   .grid-2 {
-    grid-template-columns: 1fr;
+    grid-template-columns: 1fr !important;
+  }
+
+  .cost-inputs-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* iPhone 11 & Mobile Modal Optimizations */
+  .modal-overlay {
+    padding: 6px !important;
+    align-items: flex-end !important;
+  }
+
+  .modal-box {
+    max-height: 95vh !important;
+    border-radius: 22px 22px 0 0 !important;
+    padding: 14px !important;
+    width: 100% !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Prevents iOS Safari from auto-zooming on input focus */
+  input, select, textarea {
+    font-size: 16px !important;
   }
 }
 

@@ -39,6 +39,38 @@ export const formatDateOnly = (dateString?: string): string => {
   }
 };
 
+// Yerel saat dilimine göre (Türkiye / istemci saati) YYYY-MM-DD formatında tarih döndürür
+export const getLocalDateString = (d: Date = new Date()): string => {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+export const isTicketCompleted = (t: ServiceTicket): boolean => {
+  if (t.status === 'cancelled') return false;
+  // Teslim edilmiş veya hazır olup, ödemesi tam tahsil edilmiş veya ofis onayı bekleyenler ustanın aktif listesinden tamamlandı sayılır
+  const isFinished = t.status === 'delivered' || t.status === 'ready';
+  const isPaid = t.paymentStatus === 'paid' || t.paymentStatus === 'pending_approval' || (t.totalAmount === 0 && t.paidAmount === 0);
+  return isFinished && isPaid;
+};
+
+// İleri tarihli randevular (Henüz günü gelmemiş gelecek açık randevular)
+export const isUpcomingTicket = (t: ServiceTicket, todayStr: string = getLocalDateString()): boolean => {
+  if (t.status === 'cancelled' || isTicketCompleted(t)) return false;
+  return Boolean(t.scheduledDate && t.scheduledDate > todayStr);
+};
+
+// Bugünün ve dünden devreden aktif servisleri
+// 1. Randevusu bugün olanlar
+// 2. Randevusu geçmişte kalan ama bitmeyen, parça bekleyen veya ödemesi bekleyen tüm devreden işler
+// 3. Randevu tarihi belirtilmemiş tüm açık işler
+export const isTodayTicket = (t: ServiceTicket, todayStr: string = getLocalDateString()): boolean => {
+  if (t.status === 'cancelled' || isTicketCompleted(t)) return false;
+  // İleri tarihli bir güne ait değilse, tamamlanana kadar bugünün aktif ekranında kalır
+  return !t.scheduledDate || t.scheduledDate <= todayStr;
+};
+
 export const deviceTypeConfig: Record<DeviceType, { label: string; icon: string; bg: string; color: string }> = {
   washing_machine: {
     label: 'Çamaşır Makinesi',
@@ -161,9 +193,14 @@ export const priorityConfig: Record<Priority, { label: string; bg: string; color
 
 export const paymentStatusConfig: Record<PaymentStatus, { label: string; bg: string; color: string }> = {
   paid: {
-    label: 'Tahsil Edildi',
+    label: 'Tahsil Edildi (Onaylandı)',
     bg: 'rgba(16, 185, 129, 0.15)',
     color: '#10b981',
+  },
+  pending_approval: {
+    label: 'Tahsilat Onayı Bekliyor',
+    bg: 'rgba(245, 158, 11, 0.18)',
+    color: '#f59e0b',
   },
   partial: {
     label: 'Kısmi Ödendi',

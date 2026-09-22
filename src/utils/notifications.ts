@@ -35,24 +35,18 @@ export const initAudioContext = () => {
   }
 };
 
-// Hem HTML5 Audio hem Web Audio API ile zili çal (iPhone, Android ve PC'de garantili çalar)
-export const playNotificationSound = () => {
-  // 1. Yöntem: HTML5 Audio ile gerçek melodik zil dosyasını çal (./bell.wav)
-  try {
-    const audio = cachedAudioElement || new Audio('./bell.wav');
-    audio.currentTime = 0;
-    audio.volume = 1.0;
-    const p = audio.play();
-    if (p !== undefined) {
-      p.catch((err) => {
-        console.warn('HTML5 ses çalma engeli (sessiz mod olabilir):', err);
-      });
-    }
-  } catch (e) {
-    console.warn('HTML5 Audio oynatılamadı:', e);
-  }
+// Son ses çalma zamanı (Sürekli çalmayı engelleyen güvenlik kilidi)
+let lastSoundPlayTime = 0;
+const SOUND_MIN_INTERVAL_MS = 5000; // En az 5 saniye aralıkla çalabilir, susar
 
-  // 2. Yöntem: Web Audio Sentezleyici ile çift tonlu Ding-Dong çal
+// Tam 2 kere net 'Bip - Bip' sesi çalar ve DERHAL SUSAR
+export const playNotificationSound = () => {
+  const now = Date.now();
+  if (now - lastSoundPlayTime < SOUND_MIN_INTERVAL_MS) {
+    return; // Henüz soğuma süresinde, susmaya devam et!
+  }
+  lastSoundPlayTime = now;
+
   try {
     const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
     if (AudioContextClass) {
@@ -60,37 +54,38 @@ export const playNotificationSound = () => {
       if (ctx.state === 'suspended') {
         ctx.resume().catch(() => {});
       }
-      if (ctx.state === 'running' || ctx.state === 'suspended') {
-        const osc1 = ctx.createOscillator();
-        const gain1 = ctx.createGain();
-        osc1.type = 'sine';
-        osc1.frequency.setValueAtTime(880, ctx.currentTime);
-        osc1.frequency.exponentialRampToValueAtTime(1320, ctx.currentTime + 0.15);
-        gain1.gain.setValueAtTime(0.4, ctx.currentTime);
-        gain1.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.4);
-        osc1.connect(gain1);
-        gain1.connect(ctx.destination);
-        osc1.start(ctx.currentTime);
-        osc1.stop(ctx.currentTime + 0.4);
 
-        const osc2 = ctx.createOscillator();
-        const gain2 = ctx.createGain();
-        osc2.type = 'sine';
-        osc2.frequency.setValueAtTime(1174, ctx.currentTime + 0.2);
-        osc2.frequency.exponentialRampToValueAtTime(1760, ctx.currentTime + 0.4);
-        gain2.gain.setValueAtTime(0.45, ctx.currentTime + 0.2);
-        gain2.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.9);
-        osc2.connect(gain2);
-        gain2.connect(ctx.destination);
-        osc2.start(ctx.currentTime + 0.2);
-        osc2.stop(ctx.currentTime + 0.9);
-      }
+      const nowTime = ctx.currentTime;
+
+      // 1. BİP (0.0s - 0.12s)
+      const osc1 = ctx.createOscillator();
+      const gain1 = ctx.createGain();
+      osc1.type = 'sine';
+      osc1.frequency.setValueAtTime(880, nowTime); // A5
+      gain1.gain.setValueAtTime(0.25, nowTime);
+      gain1.gain.exponentialRampToValueAtTime(0.001, nowTime + 0.12);
+      osc1.connect(gain1);
+      gain1.connect(ctx.destination);
+      osc1.start(nowTime);
+      osc1.stop(nowTime + 0.12);
+
+      // 2. BİP (0.18s - 0.30s) - Tam 2. bipleme ve hemen ardından kesin sessizlik
+      const osc2 = ctx.createOscillator();
+      const gain2 = ctx.createGain();
+      osc2.type = 'sine';
+      osc2.frequency.setValueAtTime(1046.5, nowTime + 0.18); // C6
+      gain2.gain.setValueAtTime(0.3, nowTime + 0.18);
+      gain2.gain.exponentialRampToValueAtTime(0.001, nowTime + 0.32);
+      osc2.connect(gain2);
+      gain2.connect(ctx.destination);
+      osc2.start(nowTime + 0.18);
+      osc2.stop(nowTime + 0.32);
     }
   } catch (e) {
     // Web audio fail safe
   }
 
-  // 3. Titreşim fırlat
+  // Cihaz titreşimi
   triggerVibration();
 };
 
@@ -209,12 +204,14 @@ export const showTechnicianJobNotification = async (ticket: ServiceTicket) => {
   // 3. Sistem bildirimi göster
   const title = `🚨 YENİ SERVİS İŞİ: ${ticket.ticketNumber}`;
   const body = `${ticket.customerName} - ${ticket.brand} ${ticket.model}\nArıza: ${ticket.reportedFault}\nAdres: ${ticket.customerAddress}`;
-  const targetUrl = `/?mode=technician&ticket=${ticket.id}`;
+  const isSubpath = typeof window !== 'undefined' && window.location.pathname.includes('/servispro');
+  const base = isSubpath ? '/servispro/' : './';
+  const targetUrl = `${base}?mode=technician&ticket=${ticket.id}`;
 
   const options = {
     body,
-    icon: '/favicon.svg',
-    badge: '/favicon.svg',
+    icon: `${base}favicon.svg`,
+    badge: `${base}favicon.svg`,
     vibrate: [200, 100, 200, 100, 400],
     data: { url: targetUrl, ticketId: ticket.id },
     actions: [

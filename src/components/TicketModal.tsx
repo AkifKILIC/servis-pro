@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { X, UserPlus, Check, Sparkles, Calendar, Clock, MapPin, Phone, User, Wrench } from 'lucide-react';
 import { Customer, ServiceTicket, DeviceType, Priority } from '../types';
-import { COMMON_BRANDS, deviceTypeConfig } from '../utils/helpers';
+import { COMMON_BRANDS, deviceTypeConfig, getLocalDateString } from '../utils/helpers';
 
 interface TicketModalProps {
   isOpen: boolean;
@@ -31,7 +31,7 @@ export const TicketModal: React.FC<TicketModalProps> = ({
 }) => {
   if (!isOpen) return null;
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = getLocalDateString();
 
   // Form State
   const [isNewCustomer, setIsNewCustomer] = useState(customers.length === 0);

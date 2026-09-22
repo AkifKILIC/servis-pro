@@ -26,7 +26,11 @@ import {
   paymentStatusConfig,
   generateWhatsAppLink,
   generateMapsLink,
-  generateGroupWhatsAppLink
+  generateGroupWhatsAppLink,
+  getLocalDateString,
+  isTicketCompleted,
+  isUpcomingTicket,
+  isTodayTicket
 } from '../utils/helpers';
 
 interface TicketListProps {
@@ -34,6 +38,7 @@ interface TicketListProps {
   onSelectTicket: (ticket: ServiceTicket) => void;
   onOpenNewTicket: () => void;
   onPrintTicket: (ticket: ServiceTicket) => void;
+  onApprovePayment?: (ticketId: string) => void;
   shopName: string;
   shopPhone: string;
 }
@@ -43,17 +48,42 @@ export const TicketList: React.FC<TicketListProps> = ({
   onSelectTicket,
   onOpenNewTicket,
   onPrintTicket,
+  onApprovePayment,
   shopName,
   shopPhone,
 }) => {
+  const [activeDateTab, setActiveDateTab] = useState<'today' | 'pending_approval' | 'upcoming' | 'completed' | 'all'>('today');
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [deviceFilter, setDeviceFilter] = useState<string>('all');
   const [priorityFilter, setPriorityFilter] = useState<string>('all');
   const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid');
 
+  // Yerel Saat Dilimine Göre Bugünün Tarihi (YYYY-MM-DD)
+  const todayStr = getLocalDateString();
+
+  // 1. Bugünün ve Dünden Devreden Açık Servisleri (Bitmeyen, parça bekleyen veya ödeme bekleyen tüm işler)
+  const todayTickets = tickets.filter(t => isTodayTicket(t, todayStr));
+
+  // 2. Saha Tahsilatı Yapılmış, Ofis Onayı Bekleyen Fişler
+  const pendingApprovalTickets = tickets.filter(t => t.paymentStatus === 'pending_approval');
+
+  // 3. İleri Tarihli Randevular: Randevusu gelecekte olan açık işler (o gün gelene kadar burada tutulur)
+  const upcomingTickets = tickets.filter(t => isUpcomingTicket(t, todayStr));
+
+  // 4. Tamamlanan & Tahsil Edilenler: Hem teslim edilmiş hem de tahsilatı tamamlanmış arşiv kayıtları
+  const completedTickets = tickets.filter(t => isTicketCompleted(t));
+
+  // Aktif sekmeye göre temel fiş listesi
+  const baseTickets = 
+    activeDateTab === 'today' ? todayTickets :
+    activeDateTab === 'pending_approval' ? pendingApprovalTickets :
+    activeDateTab === 'upcoming' ? upcomingTickets :
+    activeDateTab === 'completed' ? completedTickets :
+    tickets;
+
   // Filtreleme
-  const filteredTickets = tickets.filter(ticket => {
+  const filteredTickets = baseTickets.filter(ticket => {
     // Metin araması
     const searchLower = searchTerm.toLowerCase();
     const matchesSearch = 
@@ -82,7 +112,12 @@ export const TicketList: React.FC<TicketListProps> = ({
       <div className="top-header">
         <div className="page-title">
           <h2>Servis Fişleri & İş Emirleri</h2>
-          <p>Tüm arıza kayıtları, onarım süreçleri ve müşteri servis fişleri ({tickets.length} kayıt)</p>
+          <p>
+            {activeDateTab === 'today' ? `Bugünün açık servisleri (${todayTickets.length} iş)` :
+             activeDateTab === 'upcoming' ? `İleri tarihe planlanan randevular (${upcomingTickets.length} randevu)` :
+             activeDateTab === 'completed' ? `Tamamlanan & tahsil edilen servisler (${completedTickets.length} fiş)` :
+             `Tüm servis arşivi (${tickets.length} kayıt)`}
+          </p>
         </div>
         <div className="header-actions">
           <button className="btn btn-primary" onClick={onOpenNewTicket}>
@@ -90,6 +125,86 @@ export const TicketList: React.FC<TicketListProps> = ({
             <span>Yeni Servis Fişi Aç</span>
           </button>
         </div>
+      </div>
+
+      {/* 4 Ana Kategori Sekmesi: Bugünün Servisleri, İleri Tarihliler, Tamamlananlar, Tüm Fişler */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '10px', marginBottom: '18px' }}>
+        <button 
+          className={`btn btn-secondary ${activeDateTab === 'today' ? 'active' : ''}`}
+          onClick={() => setActiveDateTab('today')}
+          style={{ 
+            padding: '12px 14px', 
+            background: activeDateTab === 'today' ? 'var(--primary-light)' : undefined, 
+            color: activeDateTab === 'today' ? 'var(--primary)' : undefined,
+            fontWeight: 800,
+            border: activeDateTab === 'today' ? '1px solid var(--primary)' : undefined,
+            justifyContent: 'center'
+          }}
+        >
+          <Calendar size={18} />
+          <span>📅 Bugünün Servisleri ({todayTickets.length})</span>
+        </button>
+
+        <button 
+          className={`btn btn-secondary ${activeDateTab === 'pending_approval' ? 'active' : ''}`}
+          onClick={() => setActiveDateTab('pending_approval')}
+          style={{ 
+            padding: '12px 14px', 
+            background: activeDateTab === 'pending_approval' ? 'rgba(245, 158, 11, 0.25)' : (pendingApprovalTickets.length > 0 ? 'rgba(245, 158, 11, 0.12)' : undefined), 
+            color: activeDateTab === 'pending_approval' ? '#f59e0b' : (pendingApprovalTickets.length > 0 ? '#f59e0b' : undefined),
+            fontWeight: 800,
+            border: activeDateTab === 'pending_approval' ? '1px solid #f59e0b' : (pendingApprovalTickets.length > 0 ? '1px dashed #f59e0b' : undefined),
+            justifyContent: 'center'
+          }}
+        >
+          <Clock size={18} />
+          <span>⏳ Onay Bekleyenler ({pendingApprovalTickets.length})</span>
+        </button>
+
+        <button 
+          className={`btn btn-secondary ${activeDateTab === 'upcoming' ? 'active' : ''}`}
+          onClick={() => setActiveDateTab('upcoming')}
+          style={{ 
+            padding: '12px 14px', 
+            background: activeDateTab === 'upcoming' ? 'rgba(59, 130, 246, 0.2)' : undefined, 
+            color: activeDateTab === 'upcoming' ? 'var(--primary)' : undefined,
+            fontWeight: 800,
+            border: activeDateTab === 'upcoming' ? '1px solid var(--primary)' : undefined,
+            justifyContent: 'center'
+          }}
+        >
+          <Clock size={18} />
+          <span>🗓️ İleri Tarihli Randevular ({upcomingTickets.length})</span>
+        </button>
+
+        <button 
+          className={`btn btn-secondary ${activeDateTab === 'completed' ? 'active' : ''}`}
+          onClick={() => setActiveDateTab('completed')}
+          style={{ 
+            padding: '12px 14px', 
+            background: activeDateTab === 'completed' ? 'rgba(16, 185, 129, 0.2)' : undefined, 
+            color: activeDateTab === 'completed' ? '#10b981' : undefined,
+            fontWeight: 800,
+            border: activeDateTab === 'completed' ? '1px solid #10b981' : undefined,
+            justifyContent: 'center'
+          }}
+        >
+          <CheckCircle2 size={18} />
+          <span>💰 Tamamlanan & Tahsil Edilen ({completedTickets.length})</span>
+        </button>
+
+        <button 
+          className={`btn btn-secondary ${activeDateTab === 'all' ? 'active' : ''}`}
+          onClick={() => setActiveDateTab('all')}
+          style={{ 
+            padding: '12px 14px', 
+            background: activeDateTab === 'all' ? 'rgba(255, 255, 255, 0.1)' : undefined, 
+            fontWeight: 800,
+            justifyContent: 'center'
+          }}
+        >
+          <span>📋 Tüm Kayıtlar ({tickets.length})</span>
+        </button>
       </div>
 
       {/* Filter & Search Bar */}
@@ -106,6 +221,7 @@ export const TicketList: React.FC<TicketListProps> = ({
               onChange={(e) => setSearchTerm(e.target.value)}
             />
           </div>
+
 
           {/* Status Filter */}
           <select 
@@ -332,14 +448,31 @@ export const TicketList: React.FC<TicketListProps> = ({
                     </a>
                   </div>
 
-                  <button 
-                    className="btn btn-secondary btn-sm"
-                    onClick={() => onPrintTicket(ticket)}
-                    title="Servis Fişi / Makbuz Yazdır"
-                  >
-                    <Printer size={14} />
-                    <span>Yazdır</span>
-                  </button>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    {ticket.paymentStatus === 'pending_approval' && onApprovePayment && (
+                      <button 
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        style={{ background: 'linear-gradient(135deg, #10b981, #059669)', border: 'none', fontWeight: 800, padding: '5px 10px', fontSize: '0.78rem' }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onApprovePayment(ticket.id);
+                        }}
+                        title="Tahsilatı Onayla ve Kasaya İşle"
+                      >
+                        <CheckCircle2 size={13} />
+                        <span>Onayla</span>
+                      </button>
+                    )}
+                    <button 
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => onPrintTicket(ticket)}
+                      title="Servis Fişi / Makbuz Yazdır"
+                    >
+                      <Printer size={14} />
+                      <span>Yazdır</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             );
@@ -441,6 +574,20 @@ export const TicketList: React.FC<TicketListProps> = ({
                         >
                           <Users size={14} />
                         </a>
+                        {ticket.paymentStatus === 'pending_approval' && onApprovePayment && (
+                          <button 
+                            type="button"
+                            className="btn btn-primary btn-sm"
+                            style={{ background: 'linear-gradient(135deg, #10b981, #059669)', border: 'none', fontWeight: 800, padding: '4px 8px', fontSize: '0.74rem' }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onApprovePayment(ticket.id);
+                            }}
+                            title="Tahsilatı Onayla ve Kasaya İşle"
+                          >
+                            <CheckCircle2 size={13} />
+                          </button>
+                        )}
                         <button 
                           className="btn btn-secondary btn-sm"
                           onClick={() => onPrintTicket(ticket)}

@@ -29,7 +29,7 @@ import { TechnicianMobileView } from './components/TechnicianMobileView';
 import { LoginView } from './components/LoginView';
 import { registerServiceWorker, showTechnicianJobNotification, playNotificationSound } from './utils/notifications';
 import { AuthUser, getAuthSession, clearAuthSession } from './utils/auth';
-import { generateTechnicianDispatchWhatsAppLink } from './utils/helpers';
+import { generateTechnicianDispatchWhatsAppLink, formatCurrency } from './utils/helpers';
 
 export const App: React.FC = () => {
   // Aktif Oturum (1 yıl kalıcı çerez)
@@ -45,7 +45,9 @@ export const App: React.FC = () => {
   );
   const [theme, setTheme] = useState<'dark' | 'light'>(storage.getTheme());
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
-  const [isLiveConnected, setIsLiveConnected] = useState<boolean>(false);
+  const [isLiveConnected, setIsLiveConnected] = useState<boolean>(true);
+  const [connectionState, setConnectionState] = useState<'online' | 'offline' | 'syncing'>(syncService.getConnectionState());
+  const [pendingQueueCount, setPendingQueueCount] = useState<number>(syncService.getOfflineQueueCount());
   const [liveNotification, setLiveNotification] = useState<string | null>(null);
 
   // Veriler
@@ -102,16 +104,22 @@ export const App: React.FC = () => {
       }
     }
 
-    // Sunucudan mevcut son verileri çek ve birleştir
+    // Sunucudan mevcut son verileri çek ve birleştir (MySQL ve Bulut)
     syncService.pullData().then((serverData) => {
-      if (serverData && serverData.tickets && serverData.tickets.length > 0) {
-        setTickets(serverData.tickets);
-        storage.saveTickets(serverData.tickets);
-        if (serverData.customers) {
+      if (serverData) {
+        if (serverData.settings && typeof serverData.settings === 'object') {
+          setSettings(serverData.settings);
+          storage.saveSettings(serverData.settings);
+        }
+        if (serverData.tickets && Array.isArray(serverData.tickets) && serverData.tickets.length > 0) {
+          setTickets(serverData.tickets);
+          storage.saveTickets(serverData.tickets);
+        }
+        if (serverData.customers && Array.isArray(serverData.customers) && serverData.customers.length > 0) {
           setCustomers(serverData.customers);
           storage.saveCustomers(serverData.customers);
         }
-        if (serverData.parts) {
+        if (serverData.parts && Array.isArray(serverData.parts) && serverData.parts.length > 0) {
           setParts(serverData.parts);
           storage.saveParts(serverData.parts);
         }
@@ -196,7 +204,22 @@ export const App: React.FC = () => {
           }
           setTimeout(() => setLiveNotification(null), 8000);
         }
+      } else if (event.type === 'CONNECTION_STATE_CHANGED') {
+        if (event.data) {
+          setConnectionState(event.data.state);
+          setPendingQueueCount(event.data.pendingCount || 0);
+          setIsLiveConnected(event.data.state === 'online');
+        }
+      } else if (event.type === 'SETTINGS_UPDATED') {
+        if (event.data && typeof event.data === 'object') {
+          setSettings(event.data);
+          storage.saveSettings(event.data);
+        }
       } else if (event.type === 'FULL_SYNC') {
+        if (event.data?.settings && typeof event.data.settings === 'object') {
+          setSettings(event.data.settings);
+          storage.saveSettings(event.data.settings);
+        }
         if (event.data?.tickets && Array.isArray(event.data.tickets)) {
           setTickets(event.data.tickets);
           storage.saveTickets(event.data.tickets);
@@ -248,6 +271,47 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleManualSync = async () => {
+    setLiveNotification('🔄 MySQL veritabanı ile eşitleniyor...');
+    const res = await syncService.triggerManualSync();
+    setTickets(storage.getTickets());
+    setCustomers(storage.getCustomers());
+    setParts(storage.getParts());
+    setTransactions(storage.getCashTransactions());
+    setSettings(storage.getSettings());
+    setLiveNotification(res.success ? '✅ ' + res.message : '⚠️ ' + res.message);
+    setTimeout(() => setLiveNotification(null), 4000);
+    return res;
+  };
+
+  useEffect(() => {
+    (window as any).__TRIGGER_SYNC__ = handleManualSync;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // F5 veya Ctrl+R basıldığında sayfayı beyazlatmadan canlı verileri arka planda tazele
+      if (e.key === 'F5' || (e.ctrlKey && e.key.toLowerCase() === 'r') || (e.metaKey && e.key.toLowerCase() === 'r')) {
+        e.preventDefault();
+        handleManualSync();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+
+    // Her 30 saniyede bir sessiz arka plan kontrolü (Electron & Web açıkken yeni kayıtları otomatik çeker)
+    const autoSyncInterval = setInterval(() => {
+      syncService.pullData().then((fresh) => {
+        if (fresh && fresh.tickets) {
+          setTickets(fresh.tickets);
+          storage.saveTickets(fresh.tickets);
+        }
+      }).catch(() => {});
+    }, 30000);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      clearInterval(autoSyncInterval);
+    };
+  }, []);
+
   // Fiş İşlemleri - "Kayıt oluşturulduğu gibi ustaya atsın"
   const handleSaveTicket = (ticketData: any, newCustPayload?: any, autoWhatsApp?: boolean) => {
     if (newCustPayload) {
@@ -271,7 +335,7 @@ export const App: React.FC = () => {
     setIsTicketModalOpen(false);
     setTicketToEdit(null);
 
-    // Canlı sunucuya aktar
+    // Canlı sunucuya (MySQL) aktar
     syncService.pushFullSync({
       tickets: updatedTickets,
       customers: storage.getCustomers(),
@@ -279,6 +343,10 @@ export const App: React.FC = () => {
       cash: storage.getCashTransactions(),
       settings: storage.getSettings(),
     });
+
+    if (savedTicket) {
+      syncService.saveTicketToSql(savedTicket);
+    }
 
     // USTANIN TELEFONUNA ANINDA SESLİ BİLDİRİM & ZİL FIRLAT ("Kayıt oluşturulduğu gibi ustaya atsın")
     if (savedTicket) {
@@ -298,15 +366,122 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleApprovePayment = async (ticketId: string) => {
+    const currentTickets = storage.getTickets();
+    const t = currentTickets.find(item => item.id === ticketId);
+    if (!t) return;
+
+    const paymentAmount = (t.paidAmount && t.paidAmount > 0) ? t.paidAmount : (t.totalAmount || 0);
+    const payMethod = t.paymentMethod || 'cash';
+    const partsTotal = (t.partsUsed || []).reduce((sum, p) => sum + (p.totalPrice || (p.unitPrice * p.quantity) || 0), 0);
+
+    // 1. Fiş durumunu 'paid' olarak güncelle
+    const updated = storage.updateTicket(ticketId, {
+      paymentStatus: 'paid',
+      paidAmount: paymentAmount,
+      updatedAt: new Date().toISOString(),
+    });
+
+    // 2. Kasaya Gelir Ekle (Servis Tahsilatı) ve MySQL'e yaz
+    if (paymentAmount > 0) {
+      const incomeTx = storage.addCashTransaction({
+        type: 'income',
+        category: 'Servis Tahsilatı',
+        amount: paymentAmount,
+        date: new Date().toISOString(),
+        description: `${t.customerName} - ${t.ticketNumber} Servis Tahsilatı`,
+        relatedTicketId: t.id,
+        paymentMethod: payMethod,
+      });
+      syncService.saveCashToSql(incomeTx);
+    }
+
+    // 3. Fişte kullanılan parçalar varsa Kasaya Gider Ekle (Kullanılan Parça Maliyeti) ve MySQL'e yaz
+    if (partsTotal > 0) {
+      const partsSummary = (t.partsUsed || []).map(p => `${p.partName} (${p.quantity} ad.)`).join(', ');
+      const expenseTx = storage.addCashTransaction({
+        type: 'expense',
+        category: 'Yedek Parça Gideri',
+        amount: partsTotal,
+        date: new Date().toISOString(),
+        description: `${t.ticketNumber} Kullanılan Parça Bedeli - ${partsSummary}`,
+        relatedTicketId: t.id,
+        paymentMethod: payMethod,
+      });
+      syncService.saveCashToSql(expenseTx);
+    }
+
+    // 4. Güncellenen fişi MySQL'e kaydet ve diğer cihazlara yayınla
+    if (updated) {
+      syncService.saveTicketToSql(updated);
+      syncService.updateTicketField(ticketId, { paymentStatus: 'paid', paidAmount: paymentAmount });
+    }
+
+    // 5. Ekran state'lerini anında yenile
+    const freshTickets = storage.getTickets();
+    const freshCash = storage.getCashTransactions();
+    setTickets(freshTickets);
+    setTransactions(freshCash);
+
+    if (selectedTicketForDetail?.id === ticketId && updated) {
+      setSelectedTicketForDetail(updated);
+    }
+
+    setLiveNotification(`✅ ${t.ticketNumber} tahsilatı (${formatCurrency(paymentAmount)}) onaylandı ve kasaya işlendi!${partsTotal > 0 ? ` (${formatCurrency(partsTotal)} parça gideri düşüldü)` : ''}`);
+    setTimeout(() => setLiveNotification(null), 7000);
+  };
+
   const handleUpdateTicket = (id: string, updates: Partial<ServiceTicket>) => {
+    const oldTicket = tickets.find(t => t.id === id);
     const updated = storage.updateTicket(id, updates);
     const newTickets = storage.getTickets();
     setTickets(newTickets);
     setParts(storage.getParts());
+
+    // Eğer doğrudan ofis modalından 'paid' yapıldıysa ve eskiden 'paid' değilse kasaya gelir ve parça gideri oluşturup MySQL'e yaz
+    if (oldTicket && oldTicket.paymentStatus !== 'paid' && updates.paymentStatus === 'paid') {
+      const paymentAmount = updates.paidAmount || (updated ? updated.paidAmount : 0) || (oldTicket.totalAmount || 0);
+      const payMethod = updates.paymentMethod || oldTicket.paymentMethod || 'cash';
+      const partsTotal = ((updates.partsUsed || oldTicket.partsUsed) || []).reduce((sum, p) => sum + (p.totalPrice || (p.unitPrice * p.quantity) || 0), 0);
+
+      if (paymentAmount > 0) {
+        const incomeTx = storage.addCashTransaction({
+          type: 'income',
+          category: 'Servis Tahsilatı',
+          amount: paymentAmount,
+          date: new Date().toISOString(),
+          description: `${oldTicket.customerName} - ${oldTicket.ticketNumber} Servis Tahsilatı`,
+          relatedTicketId: oldTicket.id,
+          paymentMethod: payMethod,
+        });
+        syncService.saveCashToSql(incomeTx);
+      }
+
+      if (partsTotal > 0) {
+        const partsList = updates.partsUsed || oldTicket.partsUsed || [];
+        const partsSummary = partsList.map(p => `${p.partName} (${p.quantity} ad.)`).join(', ');
+        const expenseTx = storage.addCashTransaction({
+          type: 'expense',
+          category: 'Yedek Parça Gideri',
+          amount: partsTotal,
+          date: new Date().toISOString(),
+          description: `${oldTicket.ticketNumber} Kullanılan Parça Bedeli - ${partsSummary}`,
+          relatedTicketId: oldTicket.id,
+          paymentMethod: payMethod,
+        });
+        syncService.saveCashToSql(expenseTx);
+      }
+    }
+
     setTransactions(storage.getCashTransactions());
 
     if (selectedTicketForDetail && selectedTicketForDetail.id === id && updated) {
       setSelectedTicketForDetail(updated);
+    }
+
+    // MySQL'e anında kaydet
+    if (updated) {
+      syncService.saveTicketToSql(updated);
     }
 
     // Saha veya ofis güncellemesini canlı sunucuya bildir (anında diğer tüm cihazlarda güncellensin)
@@ -321,6 +496,9 @@ export const App: React.FC = () => {
       setSelectedTicketForDetail(null);
     }
 
+    // MySQL veritabanından kalıcı olarak sil (Tüm cihazlardan anında silinir)
+    syncService.deleteTicketFromSql(id);
+
     syncService.pushFullSync({
       tickets: newTickets,
       customers: storage.getCustomers(),
@@ -332,14 +510,19 @@ export const App: React.FC = () => {
 
   // Müşteri İşlemleri
   const handleSaveCustomer = (custData: Omit<Customer, 'id' | 'createdAt'>, id?: string) => {
+    let savedCust: Customer | null = null;
     if (id) {
-      storage.updateCustomer(id, custData);
+      savedCust = storage.updateCustomer(id, custData);
     } else {
-      storage.addCustomer(custData);
+      savedCust = storage.addCustomer(custData);
     }
     const newCusts = storage.getCustomers();
     setCustomers(newCusts);
     setCustomerToEdit(null);
+
+    if (savedCust) {
+      syncService.saveCustomerToSql(savedCust);
+    }
 
     syncService.pushFullSync({
       tickets: storage.getTickets(),
@@ -352,44 +535,60 @@ export const App: React.FC = () => {
 
   const handleDeleteCustomer = (id: string) => {
     storage.deleteCustomer(id);
+    syncService.deleteCustomerFromSql(id);
     setCustomers(storage.getCustomers());
   };
 
   // Parça İşlemleri
   const handleSavePart = (partData: Omit<SparePart, 'id' | 'updatedAt'>, id?: string) => {
+    let savedPart: SparePart | null = null;
     if (id) {
-      storage.updatePart(id, partData);
+      savedPart = storage.updatePart(id, partData);
     } else {
-      storage.addPart(partData);
+      savedPart = storage.addPart(partData);
     }
-    setParts(storage.getParts());
+    const newParts = storage.getParts();
+    setParts(newParts);
     setPartToEdit(null);
+
+    if (savedPart) {
+      syncService.savePartToSql(savedPart);
+    }
   };
 
   const handleDeletePart = (id: string) => {
     storage.deletePart(id);
+    syncService.deletePartFromSql(id);
     setParts(storage.getParts());
   };
 
   const handleAdjustStock = (partId: string, amount: number) => {
     storage.adjustPartStock(partId, amount);
-    setParts(storage.getParts());
+    const updatedParts = storage.getParts();
+    setParts(updatedParts);
+    const p = updatedParts.find(item => item.id === partId);
+    if (p) {
+      syncService.savePartToSql(p);
+    }
   };
 
   // Kasa İşlemleri
   const handleAddTransaction = (tx: Omit<CashTransaction, 'id'>) => {
-    storage.addCashTransaction(tx);
+    const newTx = storage.addCashTransaction(tx);
     setTransactions(storage.getCashTransactions());
+    syncService.saveCashToSql(newTx);
   };
 
   const handleDeleteTransaction = (id: string) => {
     storage.deleteCashTransaction(id);
+    syncService.deleteCashFromSql(id);
     setTransactions(storage.getCashTransactions());
   };
 
   // Ayarlar
   const handleSaveSettings = (newSettings: ShopSettings) => {
     storage.saveSettings(newSettings);
+    syncService.saveSettingsToSql(newSettings);
     setSettings(newSettings);
   };
 
@@ -416,6 +615,7 @@ export const App: React.FC = () => {
       />
     );
   }
+
 
   return (
     <div className="app-container">
@@ -463,6 +663,10 @@ export const App: React.FC = () => {
           lowStockCount={lowStockCount}
           isOpen={isSidebarOpen}
           setIsOpen={setIsSidebarOpen}
+          connectionState={connectionState}
+          pendingQueueCount={pendingQueueCount}
+          onTriggerSync={handleManualSync}
+          onLogout={handleLogout}
         />
       )}
 
@@ -477,20 +681,25 @@ export const App: React.FC = () => {
           padding: '16px 12px 60px 12px'
         } : undefined}
       >
-        {/* Mobile / Top Header */}
-        <Navbar 
-          onToggleMenu={() => setIsSidebarOpen(!isSidebarOpen)}
-          onOpenNewTicket={() => {
-            setTicketToEdit(null);
-            setIsTicketModalOpen(true);
-          }}
-          settings={settings}
-          activeTab={activeTab}
-          setActiveTab={setActiveTab}
-          isLiveConnected={isLiveConnected}
-          currentUser={currentUser}
-          onLogout={handleLogout}
-        />
+        {/* Mobile / Top Header: Sadece ofis sekmelerinde gösterilir, saha modunun kendi özel başlığı vardır */}
+        {activeTab !== 'technician' && (
+          <Navbar 
+            onToggleMenu={() => setIsSidebarOpen(!isSidebarOpen)}
+            onOpenNewTicket={() => {
+              setTicketToEdit(null);
+              setIsTicketModalOpen(true);
+            }}
+            settings={settings}
+            activeTab={activeTab}
+            setActiveTab={setActiveTab}
+            isLiveConnected={isLiveConnected}
+            currentUser={currentUser}
+            onLogout={handleLogout}
+            connectionState={connectionState}
+            pendingQueueCount={pendingQueueCount}
+            onTriggerSync={handleManualSync}
+          />
+        )}
 
         {/* 1. SAHA TEKNİSYEN MODU (iPHONE İÇİN ÖZEL SADELEŞTİRİLMİŞ EKRAN) */}
         {activeTab === 'technician' && (
@@ -502,6 +711,10 @@ export const App: React.FC = () => {
             shopPhone={settings.phone}
             currentUser={currentUser}
             onLogout={handleLogout}
+            connectionState={connectionState}
+            pendingQueueCount={pendingQueueCount}
+            onTriggerSync={handleManualSync}
+            onSwitchToOffice={currentUser?.role !== 'technician' ? () => setActiveTab('dashboard') : undefined}
           />
         )}
 
@@ -525,6 +738,7 @@ export const App: React.FC = () => {
               setIsPartModalOpen(true);
             }}
             onNavigateToTab={(tab) => setActiveTab(tab)}
+            onApprovePayment={handleApprovePayment}
             shopName={settings.shopName}
             shopPhone={settings.phone}
           />
@@ -539,6 +753,7 @@ export const App: React.FC = () => {
               setIsTicketModalOpen(true);
             }}
             onPrintTicket={(ticket) => setSelectedTicketForPrint(ticket)}
+            onApprovePayment={handleApprovePayment}
             shopName={settings.shopName}
             shopPhone={settings.phone}
           />
@@ -655,6 +870,7 @@ export const App: React.FC = () => {
           setTicketToEdit(t);
           setIsTicketModalOpen(true);
         }}
+        onApprovePayment={handleApprovePayment}
         shopName={settings.shopName}
         shopPhone={settings.phone}
       />

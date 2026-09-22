@@ -11,7 +11,8 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
 
-  const targetUrl = event.notification.data?.url || '/?mode=technician';
+  const scope = self.registration.scope || './';
+  const targetUrl = event.notification.data?.url || `${scope}?mode=technician`;
 
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
@@ -41,13 +42,14 @@ self.addEventListener('push', (event) => {
     }
   }
 
+  const scope = self.registration.scope || './';
   const options = {
     body: data.body,
-    icon: '/favicon.svg',
-    badge: '/favicon.svg',
+    icon: `${scope}favicon.svg`,
+    badge: `${scope}favicon.svg`,
     vibrate: [200, 100, 200, 100, 300],
     data: {
-      url: data.url || '/?mode=technician',
+      url: data.url || `${scope}?mode=technician`,
       ticketId: data.ticketId,
     },
     actions: [

@@ -10,7 +10,8 @@ import {
   Sun, 
   Moon,
   Sparkles,
-  Smartphone
+  Smartphone,
+  LogOut
 } from 'lucide-react';
 import { ShopSettings } from '../types';
 
@@ -26,6 +27,10 @@ interface SidebarProps {
   lowStockCount: number;
   isOpen: boolean;
   setIsOpen: (open: boolean) => void;
+  connectionState?: 'online' | 'offline' | 'syncing';
+  pendingQueueCount?: number;
+  onTriggerSync?: () => void;
+  onLogout?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -40,6 +45,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
   lowStockCount,
   isOpen,
   setIsOpen,
+  connectionState = 'online',
+  pendingQueueCount = 0,
+  onTriggerSync,
+  onLogout,
 }) => {
   const navItems = [
     { id: 'dashboard', label: 'Genel Bakış', icon: LayoutDashboard },
@@ -138,6 +147,55 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         {/* Footer Area */}
         <div className="sidebar-footer">
+          {/* Bağlantı & Senkronizasyon Durumu */}
+          <button
+            type="button"
+            onClick={onTriggerSync}
+            style={{
+              width: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '8px 12px',
+              borderRadius: 'var(--radius-sm)',
+              background: connectionState === 'online' 
+                ? 'rgba(16, 185, 129, 0.1)' 
+                : connectionState === 'syncing'
+                ? 'rgba(59, 130, 246, 0.12)'
+                : 'rgba(245, 158, 11, 0.12)',
+              border: '1px solid ' + (connectionState === 'online' ? 'rgba(16, 185, 129, 0.25)' : connectionState === 'syncing' ? 'rgba(59, 130, 246, 0.25)' : 'rgba(245, 158, 11, 0.25)'),
+              color: connectionState === 'online' ? '#10b981' : connectionState === 'syncing' ? '#3b82f6' : '#f59e0b',
+              fontSize: '0.75rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+              marginBottom: '8px',
+              transition: 'all 0.2s ease'
+            }}
+            title="Senkronizasyon durumunu yenilemek için tıklayın"
+          >
+            <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span 
+                style={{ 
+                  width: '8px', 
+                  height: '8px', 
+                  borderRadius: '50%', 
+                  background: connectionState === 'online' ? '#10b981' : connectionState === 'syncing' ? '#3b82f6' : '#f59e0b',
+                  boxShadow: connectionState === 'online' ? '0 0 6px #10b981' : 'none'
+                }} 
+              />
+              <span>
+                {connectionState === 'online' 
+                  ? 'MySQL Canlı' 
+                  : connectionState === 'syncing' 
+                  ? 'Eşitleniyor...' 
+                  : 'Çevrimdışı Mod'}
+              </span>
+            </span>
+            <span style={{ fontSize: '0.7rem', opacity: 0.85 }}>
+              {connectionState === 'online' ? 'Bağlı' : connectionState === 'syncing' ? 'Aktarılıyor' : `${pendingQueueCount} Bekliyor`}
+            </span>
+          </button>
+
           <button className="theme-toggle-btn" onClick={toggleTheme}>
             <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               {theme === 'dark' ? <Moon size={16} /> : <Sun size={16} />}
@@ -145,6 +203,27 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </span>
             <span style={{ fontSize: '0.75rem', opacity: 0.7 }}>Değiştir</span>
           </button>
+
+          {onLogout && (
+            <button 
+              type="button" 
+              className="theme-toggle-btn" 
+              onClick={onLogout}
+              style={{
+                marginTop: '6px',
+                color: '#ef4444',
+                borderColor: 'rgba(239, 68, 68, 0.25)',
+                background: 'rgba(239, 68, 68, 0.08)'
+              }}
+              title="Oturumu Kapat"
+            >
+              <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <LogOut size={16} color="#ef4444" />
+                <span>Çıkış Yap</span>
+              </span>
+              <span style={{ fontSize: '0.72rem', color: '#ef4444', opacity: 0.85 }}>Kapat</span>
+            </button>
+          )}
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.78rem', color: 'var(--text-dim)', padding: '4px 0' }}>
             <Sparkles size={14} color="var(--primary)" />

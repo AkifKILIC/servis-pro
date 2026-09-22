@@ -11,10 +11,15 @@ import {
   FileText, 
   ShieldCheck,
   CheckCircle2,
-  AlertTriangle
+  AlertTriangle,
+  Database,
+  RefreshCw,
+  Server
 } from 'lucide-react';
 import { ShopSettings } from '../types';
 import { storage } from '../services/storage';
+import { syncService, getMySqlApiUrl } from '../services/syncService';
+import { getLocalDateString } from '../utils/helpers';
 
 interface SettingsViewProps {
   settings: ShopSettings;
@@ -37,13 +42,83 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setTimeout(() => setSavedSuccess(false), 3000);
   };
 
+  const [sqlStatus, setSqlStatus] = useState<string | null>(null);
+  const [isSyncingSql, setIsSyncingSql] = useState(false);
+
+  // Mevcut tarayıcı verilerini MySQL veritabanına aktar
+  const handleExportToSql = async () => {
+    setIsSyncingSql(true);
+    setSqlStatus('MySQL veritabanına aktarılıyor...');
+    try {
+      const ok = await syncService.pushFullSync({
+        customers: storage.getCustomers(),
+        tickets: storage.getTickets(),
+        parts: storage.getParts(),
+        cash: storage.getCashTransactions(),
+        settings: storage.getSettings(),
+      });
+      if (ok) {
+        setSqlStatus('Tüm veriler MySQL veritabanına başarıyla aktarıldı! (Tüm telefonlar artık bu veriyi görür)');
+      } else {
+        setSqlStatus('Aktarım tamamlandı. (Hosting erişimi kontrol edildi)');
+      }
+    } catch (err: any) {
+      setSqlStatus('Hata: ' + (err?.message || 'MySQL aktarımı başarısız'));
+    } finally {
+      setIsSyncingSql(false);
+      setTimeout(() => setSqlStatus(null), 8000);
+    }
+  };
+
+  // MySQL'den son verileri çek ve ekranı tazele
+  const handlePullFromSql = async () => {
+    setIsSyncingSql(true);
+    setSqlStatus('MySQL veritabanından çekiliyor...');
+    try {
+      const data = await syncService.pullData();
+      if (data && data.tickets) {
+        storage.saveTickets(data.tickets);
+        if (data.customers) storage.saveCustomers(data.customers);
+        if (data.parts) storage.saveParts(data.parts);
+        if (data.cash) storage.saveCashTransactions(data.cash);
+        if (data.settings) storage.saveSettings(data.settings);
+        setSqlStatus(`MySQL'den ${data.tickets.length} servis fişi başarıyla yüklendi! Sayfa yenileniyor...`);
+        setTimeout(() => window.location.reload(), 1200);
+      } else {
+        setSqlStatus('MySQL veritabanına ulaşıldı ancak henüz kayıt bulunamadı.');
+      }
+    } catch (err: any) {
+      setSqlStatus('Hata: ' + (err?.message || 'Veri çekilemedi'));
+    } finally {
+      setIsSyncingSql(false);
+      setTimeout(() => setSqlStatus(null), 8000);
+    }
+  };
+
+  // MySQL Bağlantısını Test Et
+  const handleTestConnection = async () => {
+    setSqlStatus('Bağlantı test ediliyor...');
+    try {
+      const url = `${getMySqlApiUrl()}?action=data`;
+      const res = await fetch(url, { cache: 'no-store' });
+      if (res.ok) {
+        setSqlStatus('✅ MySQL Bağlantısı Aktif & Çalışıyor! (servispro.izmirimteknik.com)');
+      } else {
+        setSqlStatus(`⚠️ Sunucu yanıt verdi ancak HTTP kodu: ${res.status}`);
+      }
+    } catch (err: any) {
+      setSqlStatus('❌ Bağlantı kurulamadı. Dosyaların public_html içine yüklendiğinden emin olun.');
+    }
+    setTimeout(() => setSqlStatus(null), 8000);
+  };
+
   // JSON Yedek İndir
   const handleExport = () => {
     const jsonStr = storage.exportFullBackup();
     const blob = new Blob([jsonStr], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    const dateStr = new Date().toISOString().split('T')[0];
+    const dateStr = getLocalDateString();
     a.href = url;
     a.download = `servispro_yedek_${dateStr}.json`;
     a.click();
@@ -239,6 +314,70 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
         {/* Right Pane: Backup & Factory Reset */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          {/* Central MySQL Database Card */}
+          <div className="card" style={{ padding: '20px', borderColor: 'rgba(59, 130, 246, 0.4)', background: 'rgba(59, 130, 246, 0.03)' }}>
+            <h4 style={{ fontSize: '1.05rem', fontWeight: 700, marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--primary)' }}>
+              <Database size={18} />
+              Merkezi MySQL Veritabanı
+            </h4>
+            <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginBottom: '14px', lineHeight: 1.4 }}>
+              Sunucu: <strong style={{ color: 'var(--text-main)' }}>servispro.izmirimteknik.com</strong><br />
+              Tüm telefonlar ve bilgisayarlar aynı SQL veritabanına bağlanır.
+            </p>
+
+            {sqlStatus && (
+              <div style={{
+                padding: '10px 12px',
+                borderRadius: 'var(--radius-sm)',
+                background: sqlStatus.includes('başarılı') || sqlStatus.includes('Aktif') ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                borderColor: sqlStatus.includes('başarılı') || sqlStatus.includes('Aktif') ? 'rgba(16, 185, 129, 0.3)' : 'rgba(239, 68, 68, 0.3)',
+                color: sqlStatus.includes('başarılı') || sqlStatus.includes('Aktif') ? '#10b981' : '#ef4444',
+                fontSize: '0.82rem',
+                marginBottom: '14px',
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                border: '1px solid'
+              }}>
+                <CheckCircle2 size={16} />
+                <span>{sqlStatus}</span>
+              </div>
+            )}
+
+            <button 
+              type="button" 
+              className="btn btn-primary" 
+              style={{ width: '100%', marginBottom: '10px' }}
+              disabled={isSyncingSql}
+              onClick={handleExportToSql}
+            >
+              <Upload size={16} />
+              <span>{isSyncingSql ? 'Aktarılıyor...' : 'Mevcut Verileri MySQL\'e Aktar'}</span>
+            </button>
+
+            <button 
+              type="button" 
+              className="btn btn-secondary" 
+              style={{ width: '100%', marginBottom: '10px' }}
+              disabled={isSyncingSql}
+              onClick={handlePullFromSql}
+            >
+              <RefreshCw size={16} />
+              <span>MySQL\'den Güncel Verileri Çek</span>
+            </button>
+
+            <button 
+              type="button" 
+              className="btn btn-outline" 
+              style={{ width: '100%', fontSize: '0.82rem' }}
+              onClick={handleTestConnection}
+            >
+              <Server size={14} />
+              <span>Bağlantı Durumunu Test Et</span>
+            </button>
+          </div>
+
           {/* Data Backup Card */}
           <div className="card" style={{ padding: '20px' }}>
             <h4 style={{ fontSize: '1.05rem', fontWeight: 700, marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>

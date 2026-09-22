@@ -174,7 +174,7 @@ export const PrintReceipt: React.FC<PrintReceiptProps> = ({
                 {/* İşçilik Bedeli */}
                 {ticket.laborCost > 0 && (
                   <tr style={{ borderBottom: '1px solid #e2e8f0' }}>
-                    <td style={{ padding: '10px 12px' }}>Uzman Teknik İşçilik ve Bakım Hizmeti</td>
+                    <td style={{ padding: '10px 12px' }}>{settings.shopName} İşçilik ve Bakım Hizmeti</td>
                     <td style={{ textAlign: 'center', padding: '10px 12px' }}>1</td>
                     <td style={{ textAlign: 'right', padding: '10px 12px' }}>{formatCurrency(ticket.laborCost)}</td>
                     <td style={{ textAlign: 'right', padding: '10px 12px' }}><strong>{formatCurrency(ticket.laborCost)}</strong></td>

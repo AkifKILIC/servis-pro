@@ -9,25 +9,41 @@ import {
   Clock, 
   DollarSign, 
   Camera, 
-  Send,
-  Calendar,
-  ChevronRight,
-  Sparkles,
-  X,
-  Check,
-  Plus,
-  BellRing,
-  RefreshCw
+  Send, 
+  Calendar, 
+  ChevronRight, 
+  Sparkles, 
+  X, 
+  Check, 
+  Plus, 
+  BellRing, 
+  RefreshCw,
+  Trash2,
+  ExternalLink,
+  FileText,
+  Navigation,
+  CreditCard,
+  Receipt,
+  Share2,
+  ShieldCheck,
+  Package,
+  Monitor,
+  LogOut
 } from 'lucide-react';
 import { syncService } from '../services/syncService';
-import { ServiceTicket, SparePart } from '../types';
+import { ServiceTicket, SparePart, TicketPartItem, TicketStatus, PaymentStatus, PaymentMethod } from '../types';
 import { 
   formatCurrency, 
   formatDate, 
   deviceTypeConfig, 
   ticketStatusConfig,
   generateMapsLink,
-  cleanPhoneForWhatsApp
+  cleanPhoneForWhatsApp,
+  generateWhatsAppLink,
+  getLocalDateString,
+  isTicketCompleted,
+  isUpcomingTicket,
+  isTodayTicket
 } from '../utils/helpers';
 import { 
   requestNotificationPermission, 
@@ -46,6 +62,10 @@ interface TechnicianMobileViewProps {
   shopPhone: string;
   currentUser?: AuthUser | null;
   onLogout?: () => void;
+  connectionState?: 'online' | 'offline' | 'syncing';
+  pendingQueueCount?: number;
+  onTriggerSync?: () => void;
+  onSwitchToOffice?: () => void;
 }
 
 export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
@@ -56,20 +76,102 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
   shopPhone,
   currentUser,
   onLogout,
+  connectionState = 'online',
+  pendingQueueCount = 0,
+  onTriggerSync,
+  onSwitchToOffice,
 }) => {
-  const [filter, setFilter] = useState<'open' | 'urgent' | 'all'>('open');
+  // Filtreler: 'today' (varsayılan: Günün Servisleri), 'upcoming' (İleri tarihliler), 'completed' (Tamamlananlar), 'urgent' (Acil)
+  const [filter, setFilter] = useState<'today' | 'upcoming' | 'completed' | 'urgent'>('today');
   const [selectedTicket, setSelectedTicket] = useState<ServiceTicket | null>(null);
   const [deviceStatus, setDeviceStatus] = useState(() => checkNotificationSupport());
   const [soundTested, setSoundTested] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
+  // Saha Elemanı Detaylı İnceleme & İşlem Modalı State'leri
+  const [inspectingTicket, setInspectingTicket] = useState<ServiceTicket | null>(null);
+  const [inspectDiagnosis, setInspectDiagnosis] = useState('');
+  const [inspectStatus, setInspectStatus] = useState<TicketStatus>('in_repair');
+  const [inspectLaborCost, setInspectLaborCost] = useState(0);
+  const [inspectTransportCost, setInspectTransportCost] = useState(0);
+  const [inspectDiscount, setInspectDiscount] = useState(0);
+  const [inspectPaymentStatus, setInspectPaymentStatus] = useState<PaymentStatus>('unpaid');
+  const [inspectPaymentMethod, setInspectPaymentMethod] = useState<PaymentMethod>('cash');
+  const [inspectParts, setInspectParts] = useState<TicketPartItem[]>([]);
+  
+  // Parça Ekleme
+  const [isAddingPart, setIsAddingPart] = useState(false);
+  const [stockPartId, setStockPartId] = useState('');
+  const [customPartName, setCustomPartName] = useState('');
+  const [partPrice, setPartPrice] = useState(0);
+  const [partQty, setPartQty] = useState(1);
+
+  // Pull-to-Refresh State'leri (iPhone / Mobil Aşağı Kaydırarak Yenileme)
+  const [pullDistance, setPullDistance] = useState(0);
+  const [isPulling, setIsPulling] = useState(false);
+  const touchStartY = React.useRef<number | null>(null);
+
   const handleRefresh = async () => {
     setIsRefreshing(true);
-    await syncService.checkMissedCloudMessages();
-    setTimeout(() => setIsRefreshing(false), 800);
+    try {
+      await syncService.triggerManualSync();
+      if (typeof window !== 'undefined' && (window as any).__REFRESH_DATA__) {
+        (window as any).__REFRESH_DATA__();
+      }
+      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+        try { navigator.vibrate([30, 40]); } catch {}
+      }
+    } finally {
+      setTimeout(() => {
+        setIsRefreshing(false);
+        setPullDistance(0);
+      }, 700);
+    }
   };
 
-  // Hızlı Aksiyon Modalları
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (window.scrollY <= 2) {
+      touchStartY.current = e.touches[0].clientY;
+      setIsPulling(true);
+    } else {
+      touchStartY.current = null;
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (touchStartY.current === null || isRefreshing) return;
+    if (window.scrollY > 2) {
+      touchStartY.current = null;
+      setPullDistance(0);
+      setIsPulling(false);
+      return;
+    }
+
+    const currentY = e.touches[0].clientY;
+    const deltaY = currentY - touchStartY.current;
+
+    if (deltaY > 0) {
+      // Çekme hissi için yumuşak direnç formülü
+      const distance = Math.min(Math.pow(deltaY, 0.85) * 1.5, 95);
+      setPullDistance(distance);
+    } else {
+      setPullDistance(0);
+    }
+  };
+
+  const handleTouchEnd = () => {
+    if (touchStartY.current === null) return;
+    touchStartY.current = null;
+    setIsPulling(false);
+
+    if (pullDistance >= 50 && !isRefreshing) {
+      handleRefresh();
+    } else {
+      setPullDistance(0);
+    }
+  };
+
+  // Hızlı Aksiyon Modalları (Tek Tık Servis Ücreti / İş Alındı)
   const [isServiceFeeModalOpen, setIsServiceFeeModalOpen] = useState(false);
   const [serviceFeeAmount, setServiceFeeAmount] = useState('400');
   const [serviceFeeMethod, setServiceFeeMethod] = useState<'cash' | 'credit_card' | 'bank_transfer'>('cash');
@@ -82,15 +184,136 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
   const [repairLaborPrice, setRepairLaborPrice] = useState('600');
   const [repairStatus, setRepairStatus] = useState<'in_repair' | 'waiting_parts' | 'ready'>('in_repair');
 
-  // Filtreleme
-  const openTickets = tickets.filter(t => t.status !== 'delivered' && t.status !== 'cancelled');
-  const urgentTickets = openTickets.filter(t => t.priority === 'urgent');
+  // Yerel Saat Dilimine Göre Bugünün Tarihi (YYYY-MM-DD)
+  const todayStr = getLocalDateString();
 
-  const displayedTickets = filter === 'urgent' 
-    ? urgentTickets 
-    : filter === 'open' 
-    ? openTickets 
-    : tickets;
+  // 1. Bugünün ve Dünden Devreden Açık Servisleri (Bitmeyen, parça bekleyen veya ödeme bekleyen tüm işler)
+  const todayTickets = tickets.filter(t => isTodayTicket(t, todayStr));
+
+  // 2. İleri Tarihli Randevular: Randevusu gelecekte olan açık işler (o gün gelene kadar burada tutulur)
+  const upcomingTickets = tickets.filter(t => isUpcomingTicket(t, todayStr));
+
+  // 3. Tamamlanan & Tahsil Edilenler: Hem teslim edilmiş hem de tahsilatı tamamlanmış arşiv kayıtları
+  const completedTickets = tickets.filter(t => isTicketCompleted(t));
+
+
+  // 4. Acil Servisler (Bugünün acilleri)
+  const urgentTickets = todayTickets.filter(t => t.priority === 'urgent');
+
+  // Aktif Sekmeye Göre Gösterilecek Liste
+  const displayedTickets = 
+    filter === 'today' ? todayTickets :
+    filter === 'upcoming' ? upcomingTickets :
+    filter === 'completed' ? completedTickets :
+    urgentTickets;
+
+  // Detaylı İnceleme Modalını Aç
+  const openInspectionModal = (ticket: ServiceTicket) => {
+    setInspectingTicket(ticket);
+    setInspectDiagnosis(ticket.technicianDiagnosis || '');
+    setInspectStatus(ticket.status);
+    setInspectLaborCost(ticket.laborCost || 0);
+    setInspectTransportCost(ticket.transportCost || 0);
+    setInspectDiscount(ticket.discount || 0);
+    setInspectPaymentStatus(ticket.paymentStatus || 'unpaid');
+    setInspectPaymentMethod(ticket.paymentMethod || 'cash');
+    setInspectParts(ticket.partsUsed ? [...ticket.partsUsed] : []);
+    setIsAddingPart(false);
+    setStockPartId('');
+    setCustomPartName('');
+    setPartPrice(0);
+    setPartQty(1);
+  };
+
+  // İnceleme Modalından Parça Ekle
+  const handleAddPartToInspect = () => {
+    let newItem: TicketPartItem;
+    if (stockPartId) {
+      const sp = parts.find(p => p.id === stockPartId);
+      if (!sp) return;
+      newItem = {
+        id: 'p-item-' + Date.now(),
+        partId: sp.id,
+        partName: sp.name,
+        partCode: sp.code,
+        quantity: partQty,
+        unitPrice: sp.salePrice,
+        totalPrice: sp.salePrice * partQty,
+      };
+    } else {
+      if (!customPartName.trim()) return;
+      newItem = {
+        id: 'p-item-' + Date.now(),
+        partName: customPartName.trim(),
+        quantity: partQty,
+        unitPrice: partPrice,
+        totalPrice: partPrice * partQty,
+      };
+    }
+
+    setInspectParts(prev => [...prev, newItem]);
+    setIsAddingPart(false);
+    setStockPartId('');
+    setCustomPartName('');
+    setPartPrice(0);
+    setPartQty(1);
+  };
+
+  // İnceleme Modalından Parça Sil
+  const handleRemovePartFromInspect = (partItemId: string) => {
+    setInspectParts(prev => prev.filter(p => p.id !== partItemId));
+  };
+
+  // İnceleme Modalını Kaydet (Teknisyenin Tüm Değişikliklerini Veritabanına Yazar)
+  const handleSaveInspection = (markDeliveredAndPaid: boolean = false) => {
+    if (!inspectingTicket) return;
+
+    const partsTotal = inspectParts.reduce((sum, p) => sum + (p.totalPrice || 0), 0);
+    const finalTotal = Math.max(0, partsTotal + inspectLaborCost + inspectTransportCost - inspectDiscount);
+    const finalStatus: TicketStatus = markDeliveredAndPaid ? 'delivered' : inspectStatus;
+    // Saha ustası tahsilat aldığında ofis onayına gönderilir
+    const finalPayStatus: PaymentStatus = markDeliveredAndPaid 
+      ? 'pending_approval' 
+      : (inspectPaymentStatus === 'paid' ? 'pending_approval' : inspectPaymentStatus);
+    const paidAmount = (finalPayStatus === 'pending_approval' || finalPayStatus === 'partial') ? finalTotal : inspectingTicket.paidAmount;
+
+    onUpdateTicket(inspectingTicket.id, {
+      ticketNumber: inspectingTicket.ticketNumber,
+      customerName: inspectingTicket.customerName,
+      technicianDiagnosis: inspectDiagnosis.trim(),
+      status: finalStatus,
+      partsUsed: inspectParts,
+      laborCost: inspectLaborCost,
+      transportCost: inspectTransportCost,
+      discount: inspectDiscount,
+      totalAmount: finalTotal,
+      paymentStatus: finalPayStatus,
+      paymentMethod: inspectPaymentMethod,
+      paidAmount: paidAmount,
+      completedAt: (finalStatus === 'delivered' || finalStatus === 'ready') 
+        ? (inspectingTicket.completedAt || new Date().toISOString()) 
+        : undefined,
+      updatedAt: new Date().toISOString()
+    });
+
+    setInspectingTicket(null);
+  };
+
+  // Müşteriye "Yola Çıktım" WhatsApp Mesajı
+  const generateEnRouteWhatsApp = (ticket: ServiceTicket) => {
+    const cleanPhone = cleanPhoneForWhatsApp(ticket.customerPhone);
+    const dev = `${ticket.brand} ${ticket.model}`;
+    const msg = `Merhaba Sayın *${ticket.customerName}*,\n\n*${shopName}* teknik servis ekibimiz *${dev}* cihazınızın arıza onarımı için adresinize doğru yola çıkmıştır.\n\nTahmini 15-20 dakika içerisinde adresinizde olacağız. Lütfen adreste hazır bulununuz.\n\n📞 İletişim: ${shopPhone}`;
+    return `https://wa.me/${cleanPhone}?text=${encodeURIComponent(msg)}`;
+  };
+
+  // Müşteriye Dijital Garanti Belgesi & Servis Fişi Gönderme
+  const generateReceiptWhatsApp = (ticket: ServiceTicket) => {
+    const cleanPhone = cleanPhoneForWhatsApp(ticket.customerPhone);
+    const partsList = (ticket.partsUsed || []).map(p => `• ${p.partName} (${p.quantity} adet)`).join('\n');
+    const msg = `Sayın *${ticket.customerName}*,\n\n*${shopName}* teknik servis hizmetiniz tamamlanmıştır.\n\n📋 *Fiş No:* ${ticket.ticketNumber}\n🔧 *Cihaz:* ${ticket.brand} ${ticket.model}\n🛠️ *Yapılan İşlem:* ${ticket.technicianDiagnosis || 'Arıza onarımı tamamlandı.'}\n${partsList ? `📦 *Değişen Parçalar:*\n${partsList}\n` : ''}💰 *Toplam Tutar:* ${formatCurrency(ticket.totalAmount)}\n✅ *Ödeme:* ${ticket.paymentStatus === 'paid' ? 'Tahsil Edildi (Ödendi)' : 'Bekliyor'}\n\n🛡️ *Garanti:* Değişen orijinal parçalarımız ve işçiliğimiz firmamız garantisi altındadır.\n\nBizi tercih ettiğiniz için teşekkür ederiz.\n📞 ${shopPhone}`;
+    return `https://wa.me/${cleanPhone}?text=${encodeURIComponent(msg)}`;
+  };
 
   // Ses ve bildirim testi
   const handleTestSound = async () => {
@@ -98,7 +321,6 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
     playNotificationSound();
     setSoundTested(true);
 
-    // Kilit ekranı bildirimini test et (İzin verilmişse anında iPhone ekranında göster)
     if ('serviceWorker' in navigator && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
       try {
         const reg = await navigator.serviceWorker.ready;
@@ -141,7 +363,7 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
       partsUsed: [],
       discount: 0,
       totalAmount: fee,
-      paymentStatus: 'paid',
+      paymentStatus: 'pending_approval',
       paymentMethod: serviceFeeMethod,
       paidAmount: fee,
       completedAt: new Date().toISOString(),
@@ -188,74 +410,212 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
   };
 
   return (
-    <div style={{ maxWidth: '640px', margin: '0 auto', paddingBottom: '90px' }}>
-      {/* Top Mobile Bar */}
+    <div 
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      style={{ 
+        maxWidth: '640px', 
+        margin: '0 auto', 
+        paddingBottom: '90px',
+        position: 'relative',
+        minHeight: '100vh'
+      }}
+    >
+      {/* 📲 PULL TO REFRESH GÖSTERGESİ (AŞAĞI KAYDIRINCA YENİLEME) */}
       <div 
-        style={{ 
-          background: 'linear-gradient(135deg, #1e293b 0%, #0f172a 100%)', 
-          borderRadius: 'var(--radius-lg)', 
-          padding: '16px 20px', 
-          marginBottom: '20px',
-          border: '1px solid var(--border-subtle)',
+        style={{
+          height: pullDistance > 0 || isRefreshing ? `${Math.max(pullDistance, isRefreshing ? 60 : 0)}px` : '0px',
+          maxHeight: '90px',
+          overflow: 'hidden',
+          transition: isPulling ? 'none' : 'all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1)',
           display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center'
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexDirection: 'column',
+          gap: '4px',
+          background: pullDistance >= 50 || isRefreshing ? 'rgba(59, 130, 246, 0.15)' : 'rgba(255, 255, 255, 0.05)',
+          border: '1px solid ' + (pullDistance >= 50 || isRefreshing ? 'rgba(59, 130, 246, 0.3)' : 'var(--border-subtle)'),
+          borderRadius: '16px',
+          marginBottom: pullDistance > 0 || isRefreshing ? '14px' : '0px',
+          boxShadow: pullDistance > 0 || isRefreshing ? '0 4px 15px rgba(0,0,0,0.2)' : 'none'
         }}
       >
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#10b981', boxShadow: '0 0 10px #10b981' }} />
-            <h3 style={{ fontSize: '1.1rem', fontWeight: 800 }}>Saha Teknisyen Ekranı</h3>
-          </div>
-          <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-            {openTickets.length} Bekleyen Saha İşi | Canlı Senkronizasyon Aktif
-          </p>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <button 
-            type="button" 
-            className="btn btn-secondary btn-sm"
-            onClick={handleRefresh}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: pullDistance >= 50 || isRefreshing ? 'var(--primary)' : 'var(--text-muted)' }}>
+          <RefreshCw 
+            size={20} 
             style={{ 
-              padding: '6px 10px', 
-              fontSize: '0.78rem', 
-              display: 'flex', 
-              alignItems: 'center', 
-              gap: '6px',
-              borderRadius: 'var(--radius-pill)',
-              background: isRefreshing ? 'rgba(59, 130, 246, 0.2)' : 'rgba(255, 255, 255, 0.08)',
-              color: isRefreshing ? 'var(--primary)' : 'var(--text-main)',
-              border: '1px solid var(--border-subtle)'
+              transform: `rotate(${pullDistance * 4.5}deg)`,
+              transition: isPulling ? 'none' : 'transform 0.3s ease'
             }}
-          >
-            <RefreshCw size={14} className={isRefreshing ? 'spin-animation' : ''} />
-            <span>{isRefreshing ? 'Yenileniyor' : 'Yenile'}</span>
-          </button>
+            className={isRefreshing ? 'spin-animation' : ''} 
+          />
+          <strong style={{ fontSize: '0.88rem' }}>
+            {isRefreshing 
+              ? '🔄 MySQL & Bulut Verileri Eşitleniyor...' 
+              : pullDistance >= 50 
+              ? '👇 Bırakın ve Yenilensin' 
+              : '⬇️ Yenilemek İçin Aşağıya Kaydırın'}
+          </strong>
+        </div>
+        <span style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>
+          {isRefreshing ? 'Yeni fişler ve güncel işler çekiliyor...' : 'Parmağınızı aşağı çekip bırakın'}
+        </span>
+      </div>
 
-          <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
-            <span style={{ fontSize: '0.78rem', color: 'var(--primary)', fontWeight: 700 }}>
-              📱 iPhone Modu
-            </span>
-            {currentUser && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span style={{ fontSize: '0.72rem', color: '#10b981', background: 'rgba(16, 185, 129, 0.15)', padding: '2px 6px', borderRadius: '6px' }}>
-                  👤 {currentUser.name}
-                </span>
-                {onLogout && (
-                  <button
-                    type="button"
-                    onClick={onLogout}
-                    style={{ background: 'none', border: 'none', color: '#f43f5e', fontSize: '0.72rem', cursor: 'pointer', textDecoration: 'underline', padding: '0' }}
-                  >
-                    Çıkış
-                  </button>
-                )}
+      {/* 📱 SAHA USTA MODU - TEK, TEMİZ & DERLİ TOPLU MOBİL BAŞLIK */}
+      <header 
+        style={{ 
+          background: 'linear-gradient(135deg, #1e293b 0%, #0f172a 100%)', 
+          borderRadius: '16px', 
+          padding: '12px 14px', 
+          marginBottom: '14px',
+          border: '1px solid rgba(255, 255, 255, 0.08)',
+          boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '10px'
+        }}
+      >
+        {/* Üst Satır: Logo + Başlık + Hızlı Aksiyonlar */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+            <div 
+              style={{ 
+                width: '32px', 
+                height: '32px', 
+                borderRadius: '10px', 
+                background: 'linear-gradient(135deg, #3b82f6, #2563eb)', 
+                display: 'flex', 
+                alignItems: 'center', 
+                justifyContent: 'center',
+                flexShrink: 0
+              }}
+            >
+              <Wrench size={17} color="#ffffff" />
+            </div>
+            <div style={{ minWidth: 0, overflow: 'hidden' }}>
+              <h2 style={{ 
+                fontSize: '0.92rem', 
+                fontWeight: 800, 
+                color: '#ffffff', 
+                margin: 0, 
+                whiteSpace: 'nowrap', 
+                overflow: 'hidden', 
+                textOverflow: 'ellipsis' 
+              }}>
+                {shopName || 'İzmirim Teknik'}
+              </h2>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.72rem', color: 'var(--primary)', fontWeight: 600 }}>
+                <span>📱 Saha Ekranı</span>
+                <span style={{ opacity: 0.5 }}>•</span>
+                <span style={{ color: '#94a3b8' }}>{todayTickets.length} Bekleyen İş</span>
               </div>
+            </div>
+          </div>
+
+          {/* Hızlı Aksiyon Butonları (Yenile, Ofis, Çıkış) */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+            <button 
+              type="button" 
+              className="btn btn-secondary btn-sm"
+              onClick={onTriggerSync || handleRefresh}
+              style={{ 
+                padding: '6px 10px', 
+                fontSize: '0.75rem', 
+                display: 'inline-flex', 
+                alignItems: 'center', 
+                gap: '5px',
+                borderRadius: 'var(--radius-pill)',
+                background: isRefreshing ? 'rgba(59, 130, 246, 0.25)' : 'rgba(255, 255, 255, 0.08)',
+                color: isRefreshing ? 'var(--primary)' : '#ffffff',
+                border: '1px solid rgba(255, 255, 255, 0.12)'
+              }}
+              title="Verileri MySQL ile senkronize et"
+            >
+              <RefreshCw size={13} className={isRefreshing ? 'spin-animation' : ''} />
+              <span>{isRefreshing ? 'Eşitleniyor' : 'Yenile'}</span>
+            </button>
+
+            {onSwitchToOffice && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={onSwitchToOffice}
+                style={{
+                  padding: '6px 10px',
+                  fontSize: '0.75rem',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  borderRadius: 'var(--radius-pill)',
+                  background: 'rgba(255, 255, 255, 0.08)',
+                  color: '#94a3b8',
+                  border: '1px solid rgba(255, 255, 255, 0.12)'
+                }}
+                title="Ofis Yönetim Paneline Geç"
+              >
+                <Monitor size={13} />
+                <span>Ofis</span>
+              </button>
+            )}
+
+            {onLogout && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={onLogout}
+                style={{
+                  padding: '6px 8px',
+                  fontSize: '0.75rem',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  borderRadius: 'var(--radius-pill)',
+                  background: 'rgba(244, 63, 94, 0.12)',
+                  color: '#fb7185',
+                  border: '1px solid rgba(244, 63, 94, 0.25)'
+                }}
+                title="Oturumu Kapat"
+              >
+                <LogOut size={13} />
+                <span>Çıkış</span>
+              </button>
             )}
           </div>
         </div>
-      </div>
+
+        {/* Alt Satır: Durum Rozeti (MySQL Canlı / Çevrimdışı) + Kullanıcı */}
+        <div style={{ 
+          display: 'flex', 
+          alignItems: 'center', 
+          justifyContent: 'space-between', 
+          paddingTop: '8px', 
+          borderTop: '1px solid rgba(255, 255, 255, 0.06)',
+          fontSize: '0.72rem'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span 
+              style={{ 
+                width: '7px', 
+                height: '7px', 
+                borderRadius: '50%', 
+                background: connectionState === 'online' ? '#10b981' : connectionState === 'syncing' ? '#3b82f6' : '#f59e0b',
+                boxShadow: connectionState === 'online' ? '0 0 6px #10b981' : 'none'
+              }} 
+            />
+            <span style={{ color: connectionState === 'online' ? '#10b981' : connectionState === 'syncing' ? '#3b82f6' : '#f59e0b', fontWeight: 600 }}>
+              {connectionState === 'online' ? '🟢 MySQL Canlı' : connectionState === 'syncing' ? '🔄 Eşitleniyor...' : `🟠 Çevrimdışı (${pendingQueueCount || 0})`}
+            </span>
+          </div>
+
+          {currentUser && (
+            <div style={{ color: '#94a3b8', display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <span>👤 {currentUser.name}</span>
+            </div>
+          )}
+        </div>
+      </header>
 
       {/* iPhone Bildirim & Ses Durum Paneli */}
       <div 
@@ -370,28 +730,66 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
         )}
       </div>
 
-      {/* Filter Tabs */}
-      <div style={{ display: 'flex', gap: '8px', marginBottom: '18px' }}>
+      {/* Filter Tabs: Bugün, İleri Tarihliler, Tamamlananlar, Acil */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px', marginBottom: '18px' }}>
         <button 
-          className={`btn btn-secondary btn-sm ${filter === 'open' ? 'active' : ''}`}
-          onClick={() => setFilter('open')}
-          style={{ flex: 1, padding: '10px 4px', background: filter === 'open' ? 'var(--primary-light)' : undefined, color: filter === 'open' ? 'var(--primary)' : undefined }}
+          className={`btn btn-secondary btn-sm ${filter === 'today' ? 'active' : ''}`}
+          onClick={() => setFilter('today')}
+          style={{ 
+            padding: '12px 6px', 
+            background: filter === 'today' ? 'var(--primary-light)' : undefined, 
+            color: filter === 'today' ? 'var(--primary)' : undefined, 
+            fontWeight: 800,
+            border: filter === 'today' ? '1px solid var(--primary)' : undefined
+          }}
         >
-          Bekleyen İşler ({openTickets.length})
+          <Calendar size={16} />
+          <span>📅 Bugünün İşleri ({todayTickets.length})</span>
         </button>
+
+        <button 
+          className={`btn btn-secondary btn-sm ${filter === 'upcoming' ? 'active' : ''}`}
+          onClick={() => setFilter('upcoming')}
+          style={{ 
+            padding: '12px 6px', 
+            background: filter === 'upcoming' ? 'rgba(59, 130, 246, 0.2)' : undefined, 
+            color: filter === 'upcoming' ? 'var(--primary)' : undefined, 
+            fontWeight: 800,
+            border: filter === 'upcoming' ? '1px solid var(--primary)' : undefined
+          }}
+        >
+          <Clock size={16} />
+          <span>🗓️ İleri Tarihliler ({upcomingTickets.length})</span>
+        </button>
+
+        <button 
+          className={`btn btn-secondary btn-sm ${filter === 'completed' ? 'active' : ''}`}
+          onClick={() => setFilter('completed')}
+          style={{ 
+            padding: '12px 6px', 
+            background: filter === 'completed' ? 'rgba(16, 185, 129, 0.2)' : undefined, 
+            color: filter === 'completed' ? '#10b981' : undefined, 
+            fontWeight: 800,
+            border: filter === 'completed' ? '1px solid #10b981' : undefined
+          }}
+        >
+          <CheckCircle2 size={16} />
+          <span>💰 Tamamlananlar ({completedTickets.length})</span>
+        </button>
+
         <button 
           className={`btn btn-secondary btn-sm ${filter === 'urgent' ? 'active' : ''}`}
           onClick={() => setFilter('urgent')}
-          style={{ flex: 1, padding: '10px 4px', background: filter === 'urgent' ? 'rgba(239, 68, 68, 0.2)' : undefined, color: filter === 'urgent' ? '#ef4444' : undefined }}
+          style={{ 
+            padding: '12px 6px', 
+            background: filter === 'urgent' ? 'rgba(239, 68, 68, 0.2)' : undefined, 
+            color: filter === 'urgent' ? '#ef4444' : undefined, 
+            fontWeight: 800,
+            border: filter === 'urgent' ? '1px solid #ef4444' : undefined
+          }}
         >
-          Acil Çağrılar ({urgentTickets.length})
-        </button>
-        <button 
-          className={`btn btn-secondary btn-sm ${filter === 'all' ? 'active' : ''}`}
-          onClick={() => setFilter('all')}
-          style={{ flex: 1, padding: '10px 4px', background: filter === 'all' ? 'rgba(255, 255, 255, 0.1)' : undefined }}
-        >
-          Tümü ({tickets.length})
+          <AlertTriangle size={16} />
+          <span>🚨 Acil Çağrılar ({urgentTickets.length})</span>
         </button>
       </div>
 
@@ -400,14 +798,24 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
         {displayedTickets.length === 0 ? (
           <div className="card" style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-muted)' }}>
             <CheckCircle2 size={44} color="var(--emerald)" style={{ marginBottom: '8px' }} />
-            <h4>Şu Anda Bekleyen Saha İşi Yok</h4>
-            <p style={{ fontSize: '0.85rem' }}>Ofis yeni bir arıza kaydı açtığında bu ekranda otomatik belirecektir.</p>
+            <h4>
+              {filter === 'today' ? 'Bugüne Ait Bekleyen Saha İşi Yok' :
+               filter === 'upcoming' ? 'İleri Tarihe Alınmış Randevu Yok' :
+               filter === 'completed' ? 'Henüz Tamamlanan Fiş Bulunmuyor' :
+               'Acil Çağrı Yok'}
+            </h4>
+            <p style={{ fontSize: '0.85rem' }}>
+              {filter === 'today' ? 'Tüm bugünkü servisler tamamlandı veya yeni iş bekleniyor.' :
+               filter === 'upcoming' ? 'İleri tarihe randevu verildiğinde burada listelenir ve o gün geldiğinde otomatik bugünün işlerine düşer.' :
+               'Yeni kayıtlar otomatik olarak ekranda belirecektir.'}
+            </p>
           </div>
         ) : (
           displayedTickets.map(ticket => {
             const statusCfg = ticketStatusConfig[ticket.status];
             const device = deviceTypeConfig[ticket.deviceType];
             const isUrgent = ticket.priority === 'urgent';
+            const isFuture = ticket.scheduledDate && ticket.scheduledDate > todayStr;
 
             return (
               <div 
@@ -415,77 +823,119 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
                 className="card"
                 style={{ 
                   padding: '18px', 
-                  borderLeft: `5px solid ${isUrgent ? '#ef4444' : statusCfg.color}`,
+                  borderLeft: `5px solid ${isUrgent ? '#ef4444' : isFuture ? '#3b82f6' : statusCfg.color}`,
                   display: 'flex',
                   flexDirection: 'column',
                   gap: '14px',
-                  background: 'var(--bg-elevated)'
+                  background: 'var(--bg-elevated)',
+                  boxShadow: 'var(--shadow-md)',
+                  borderRadius: 'var(--radius-md)'
                 }}
               >
-                {/* Header: Ticket No & Status */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                {/* Header: Ticket No, Priority, Date & Status */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span className="ticket-number" style={{ fontSize: '1rem' }}>{ticket.ticketNumber}</span>
+                    <span className="ticket-number" style={{ fontSize: '1.05rem', fontWeight: 800 }}>{ticket.ticketNumber}</span>
                     {isUrgent && (
                       <span className="badge" style={{ background: 'rgba(239, 68, 68, 0.2)', color: '#ef4444', fontWeight: 800 }}>
-                        ACİL
+                        🚨 ACİL
+                      </span>
+                    )}
+                    {isFuture && (
+                      <span className="badge" style={{ background: 'rgba(59, 130, 246, 0.2)', color: '#3b82f6', fontWeight: 700 }}>
+                        🗓️ {ticket.scheduledDate} {ticket.scheduledTimeSlot || ''}
+                      </span>
+                    )}
+                    {ticket.scheduledDate && ticket.scheduledDate < todayStr && (
+                      <span className="badge" style={{ background: 'rgba(245, 158, 11, 0.2)', color: '#f59e0b', fontWeight: 700 }}>
+                        ⏳ Devreden İş ({ticket.scheduledDate})
+                      </span>
+                    )}
+                    {ticket.paymentStatus !== 'paid' && ticket.paymentStatus !== 'pending_approval' && (ticket.status === 'ready' || ticket.status === 'delivered') && (
+                      <span className="badge" style={{ background: 'rgba(239, 68, 68, 0.2)', color: '#ef4444', fontWeight: 700 }}>
+                        💰 Tahsilat Bekliyor
+                      </span>
+                    )}
+                    {ticket.paymentStatus === 'pending_approval' && (
+                      <span className="badge" style={{ background: 'rgba(245, 158, 11, 0.2)', color: '#f59e0b', fontWeight: 700 }}>
+                        ⏳ Ofis Tahsilat Onayı Bekliyor
                       </span>
                     )}
                   </div>
-                  <span className="badge" style={{ background: statusCfg.bg, color: statusCfg.color }}>
+                  <span className="badge" style={{ background: statusCfg.bg, color: statusCfg.color, fontWeight: 700 }}>
                     {statusCfg.label}
                   </span>
                 </div>
 
                 {/* Device & Brand */}
                 <div>
-                  <div style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--text-main)' }}>
-                    {ticket.brand} {ticket.model}
+                  <div style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span>{ticket.brand}</span>
+                    <span>{ticket.model}</span>
                   </div>
-                  <div style={{ fontSize: '0.84rem', color: 'var(--text-dim)' }}>
+                  <div style={{ fontSize: '0.84rem', color: 'var(--text-dim)', marginTop: '2px' }}>
                     {device.label} {ticket.serialNumber ? `• Seri No: ${ticket.serialNumber}` : ''}
                   </div>
                 </div>
 
                 {/* Customer Fault / Complaint */}
-                <div style={{ background: 'rgba(255, 255, 255, 0.04)', padding: '10px 14px', borderRadius: 'var(--radius-sm)' }}>
-                  <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--primary)', textTransform: 'uppercase' }}>
-                    MÜŞTERİ ARIZA ŞİKAYETİ:
+                <div style={{ background: 'rgba(255, 255, 255, 0.03)', padding: '10px 12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--amber)', fontWeight: 700, marginBottom: '2px' }}>
+                    ⚠️ BİLDİRİLEN ARIZA:
                   </div>
-                  <div style={{ fontSize: '0.92rem', color: 'var(--text-main)', marginTop: '3px', fontWeight: 500 }}>
+                  <div style={{ fontSize: '0.88rem', color: 'var(--text-main)', fontWeight: 500 }}>
                     {ticket.reportedFault}
                   </div>
+                  {ticket.technicianDiagnosis && (
+                    <div style={{ marginTop: '6px', paddingTop: '6px', borderTop: '1px dashed var(--border-subtle)', fontSize: '0.82rem', color: 'var(--primary)' }}>
+                      <strong>Usta Teşhisi:</strong> {ticket.technicianDiagnosis}
+                    </div>
+                  )}
                 </div>
 
-                {/* Customer Contact & Address (BIG BUTTONS FOR PHONE & MAP) */}
-                <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '12px' }}>
-                  <div style={{ fontWeight: 700, fontSize: '0.96rem', marginBottom: '4px' }}>
-                    {ticket.customerName}
-                  </div>
-                  <div style={{ fontSize: '0.86rem', color: 'var(--text-muted)', marginBottom: '12px' }}>
-                    📍 {ticket.customerAddress}
+                {/* Customer Information & Quick Action Touch Targets */}
+                <div style={{ background: 'rgba(59, 130, 246, 0.04)', padding: '12px', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(59, 130, 246, 0.15)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
+                    <div>
+                      <div style={{ fontWeight: 800, fontSize: '1rem', color: 'var(--text-main)' }}>
+                        👤 {ticket.customerName}
+                      </div>
+                      <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
+                        📞 {ticket.customerPhone}
+                      </div>
+                    </div>
+                    {ticket.notes && (
+                      <span className="badge" style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b', fontSize: '0.72rem' }}>
+                        📝 Özel Not Var
+                      </span>
+                    )}
                   </div>
 
-                  {/* 3 Large Action Touch Targets */}
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1.2fr', gap: '8px' }}>
+                  <div style={{ fontSize: '0.84rem', color: 'var(--text-dim)', marginBottom: '12px', display: 'flex', alignItems: 'flex-start', gap: '6px' }}>
+                    <MapPin size={16} color="var(--primary)" style={{ flexShrink: 0, marginTop: '2px' }} />
+                    <span>{ticket.customerAddress}</span>
+                  </div>
+
+                  {/* 3 Action Touch Targets: Ara, Yoldayım, Harita */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px' }}>
                     <a 
                       href={`tel:${ticket.customerPhone}`}
                       className="btn btn-secondary"
-                      style={{ padding: '12px 6px', fontSize: '0.85rem' }}
+                      style={{ padding: '10px 4px', fontSize: '0.82rem', justifyContent: 'center', gap: '4px', borderRadius: '10px' }}
                     >
-                      <Phone size={16} color="var(--primary)" />
+                      <Phone size={15} color="var(--primary)" />
                       <span>Ara</span>
                     </a>
 
                     <a 
-                      href={`https://api.whatsapp.com/send?phone=${cleanPhoneForWhatsApp(ticket.customerPhone)}&text=Merhaba%20${encodeURIComponent(ticket.customerName)},%20${encodeURIComponent(shopName)}%20servisinden%20arıza%20için%20yoldayız.`}
+                      href={generateEnRouteWhatsApp(ticket)}
                       target="_blank"
                       rel="noreferrer"
                       className="btn btn-whatsapp"
-                      style={{ padding: '12px 6px', fontSize: '0.85rem' }}
+                      style={{ padding: '10px 4px', fontSize: '0.82rem', justifyContent: 'center', gap: '4px', borderRadius: '10px' }}
                     >
-                      <MessageSquare size={16} />
-                      <span>WhatsApp</span>
+                      <Send size={15} />
+                      <span>Yoldayım</span>
                     </a>
 
                     <a 
@@ -493,48 +943,65 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
                       target="_blank"
                       rel="noreferrer"
                       className="btn btn-secondary"
-                      style={{ padding: '12px 6px', fontSize: '0.85rem' }}
+                      style={{ padding: '10px 4px', fontSize: '0.82rem', justifyContent: 'center', gap: '4px', borderRadius: '10px' }}
                     >
-                      <MapPin size={16} color="#ef4444" />
-                      <span>Yol Tarifi</span>
+                      <Navigation size={15} color="#ef4444" />
+                      <span>Harita</span>
                     </a>
                   </div>
                 </div>
 
-                {/* Technician Quick Result Actions (ADRESE GİDİLDİĞİNDE) */}
-                <div style={{ borderTop: '1px dashed var(--border-subtle)', paddingTop: '14px' }}>
-                  <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--amber)', marginBottom: '8px', textTransform: 'uppercase' }}>
-                    ADRESE VARILDIĞINDA SONUÇ GİRİŞİ:
-                  </div>
+                {/* YENİ: Ayrıntıları İncele & Tüm Saha İşlemleri Butonu */}
+                <button 
+                  type="button"
+                  className="btn btn-primary"
+                  style={{ 
+                    width: '100%', 
+                    padding: '12px', 
+                    fontSize: '0.92rem', 
+                    fontWeight: 700, 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    justifyContent: 'center', 
+                    gap: '8px',
+                    background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
+                    boxShadow: '0 4px 12px rgba(37, 99, 235, 0.3)'
+                  }}
+                  onClick={() => openInspectionModal(ticket)}
+                >
+                  <FileText size={18} />
+                  <span>Ayrıntıları İncele & İşlem Yap</span>
+                  <ChevronRight size={18} />
+                </button>
 
+                {/* Technician Quick Result Actions (Hızlı 1-Tık Butonları) */}
+                <div style={{ borderTop: '1px dashed var(--border-subtle)', paddingTop: '10px' }}>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-                    {/* Buton 1: Sadece Servis Ücretine Döndü */}
                     <button 
                       type="button"
                       className="btn btn-danger"
-                      style={{ padding: '12px 8px', fontSize: '0.82rem', textAlign: 'center', justifyContent: 'center' }}
+                      style={{ padding: '10px 6px', fontSize: '0.8rem', justifyContent: 'center' }}
                       onClick={() => {
                         setSelectedTicket(ticket);
                         setIsServiceFeeModalOpen(true);
                       }}
                     >
-                      <DollarSign size={16} />
+                      <DollarSign size={15} />
                       <span>Servis Ücretine Döndü</span>
                     </button>
 
-                    {/* Buton 2: İş Alındı / Parça Değişecek */}
                     <button 
                       type="button"
-                      className="btn btn-primary"
-                      style={{ padding: '12px 8px', fontSize: '0.82rem', textAlign: 'center', justifyContent: 'center' }}
+                      className="btn btn-secondary"
+                      style={{ padding: '10px 6px', fontSize: '0.8rem', justifyContent: 'center' }}
                       onClick={() => {
                         setSelectedTicket(ticket);
                         setRepairDiagnosis(ticket.technicianDiagnosis || '');
                         setIsJobAcceptedModalOpen(true);
                       }}
                     >
-                      <Wrench size={16} />
-                      <span>İş Alındı / Parça Gir</span>
+                      <Wrench size={15} color="var(--primary)" />
+                      <span>Hızlı İş Al / Parça Gir</span>
                     </button>
                   </div>
                 </div>
@@ -552,14 +1019,483 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
         )}
       </div>
 
-      {/* MODAL 1: SADECE SERVİS ÜCRETİNE DÖNDÜ */}
-      {isServiceFeeModalOpen && selectedTicket && (
-        <div className="modal-overlay" onClick={() => setIsServiceFeeModalOpen(false)}>
-          <div className="modal-box" onClick={e => e.stopPropagation()} style={{ maxWidth: '480px' }}>
-            <div className="modal-header">
+      {/* ============================================================== */}
+      {/* MODAL 3: SAHA ELEMANI DETAYLI İNCELEME & İŞLEM MODALI (TEK SIRA) */}
+      {/* ============================================================== */}
+      {inspectingTicket && (
+        <div 
+          className="modal-overlay" 
+          onClick={() => setInspectingTicket(null)}
+          style={{ padding: '10px' }}
+        >
+          <div 
+            className="modal-box" 
+            onClick={e => e.stopPropagation()} 
+            style={{ 
+              maxWidth: '520px', 
+              width: '100%', 
+              maxHeight: '94vh', 
+              overflowY: 'auto', 
+              padding: '16px',
+              borderRadius: '20px',
+              border: '1px solid rgba(255, 255, 255, 0.12)',
+              background: 'var(--bg-elevated, #131926)',
+              boxShadow: '0 20px 40px rgba(0, 0, 0, 0.6)'
+            }}
+          >
+            {/* Header: Fiş No, Durum ve Kapat Butonu */}
+            <div style={{ 
+              display: 'flex', 
+              justifyContent: 'space-between', 
+              alignItems: 'flex-start', 
+              paddingBottom: '14px', 
+              borderBottom: '1px solid var(--border-subtle)',
+              marginBottom: '16px'
+            }}>
               <div>
-                <h3 style={{ color: '#ef4444' }}>Servis Ücreti Tahsilatı</h3>
-                <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '6px' }}>
+                  <span className="ticket-number" style={{ fontSize: '1.2rem', fontWeight: 900 }}>
+                    {inspectingTicket.ticketNumber}
+                  </span>
+                  <span className="badge" style={{ ...ticketStatusConfig[inspectingTicket.status], fontSize: '0.8rem', padding: '4px 10px', borderRadius: '8px' }}>
+                    {ticketStatusConfig[inspectingTicket.status].label}
+                  </span>
+                </div>
+                <h3 style={{ fontSize: '1.25rem', margin: '0 0 2px 0', fontWeight: 800, color: 'var(--text-main)' }}>
+                  {inspectingTicket.brand} {inspectingTicket.model}
+                </h3>
+                <span style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
+                  {deviceTypeConfig[inspectingTicket.deviceType]?.label || 'Beyaz Eşya'}
+                </span>
+              </div>
+
+              <button 
+                type="button"
+                onClick={() => setInspectingTicket(null)}
+                style={{ 
+                  width: '40px', 
+                  height: '40px', 
+                  borderRadius: '50%', 
+                  background: 'rgba(255, 255, 255, 0.08)', 
+                  border: '1px solid rgba(255, 255, 255, 0.12)',
+                  color: 'var(--text-main)', 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  flexShrink: 0
+                }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              
+              {/* 1. MÜŞTERİ BİLGİLERİ & HIZLI ARAMA */}
+              <div className="card" style={{ padding: '14px', background: 'rgba(59, 130, 246, 0.05)', borderColor: 'rgba(59, 130, 246, 0.25)', borderRadius: '14px' }}>
+                <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--primary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+                  MÜŞTERİ & ADRES
+                </div>
+                <div style={{ fontWeight: 800, fontSize: '1.15rem', color: 'var(--text-main)', marginBottom: '4px' }}>
+                  {inspectingTicket.customerName}
+                </div>
+                <div style={{ fontSize: '0.95rem', color: 'var(--text-muted)', marginBottom: '8px', fontWeight: 600 }}>
+                  📞 {inspectingTicket.customerPhone}
+                </div>
+                <div style={{ fontSize: '0.88rem', color: 'var(--text-dim)', marginBottom: '12px', display: 'flex', alignItems: 'flex-start', gap: '6px', lineHeight: 1.4 }}>
+                  <MapPin size={16} color="var(--primary)" style={{ flexShrink: 0, marginTop: '2px' }} />
+                  <span>{inspectingTicket.customerAddress}</span>
+                </div>
+
+                {inspectingTicket.notes && (
+                  <div style={{ background: 'rgba(245, 158, 11, 0.12)', border: '1px solid rgba(245, 158, 11, 0.3)', borderRadius: '8px', padding: '10px', fontSize: '0.84rem', color: '#f59e0b', marginBottom: '12px' }}>
+                    <strong>Müşteri Notu:</strong> {inspectingTicket.notes}
+                  </div>
+                )}
+
+                {/* 3 Hızlı Buton */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px' }}>
+                  <a href={`tel:${inspectingTicket.customerPhone}`} className="btn btn-secondary" style={{ padding: '10px 4px', fontSize: '0.82rem', justifyContent: 'center', gap: '4px', borderRadius: '10px' }}>
+                    <Phone size={15} color="var(--primary)" />
+                    <span>Ara</span>
+                  </a>
+                  <a href={generateEnRouteWhatsApp(inspectingTicket)} target="_blank" rel="noreferrer" className="btn btn-whatsapp" style={{ padding: '10px 4px', fontSize: '0.82rem', justifyContent: 'center', gap: '4px', borderRadius: '10px' }}>
+                    <Send size={15} />
+                    <span>Yoldayım</span>
+                  </a>
+                  <a href={generateMapsLink(inspectingTicket.customerAddress, '', '')} target="_blank" rel="noreferrer" className="btn btn-secondary" style={{ padding: '10px 4px', fontSize: '0.82rem', justifyContent: 'center', gap: '4px', borderRadius: '10px' }}>
+                    <Navigation size={15} color="#ef4444" />
+                    <span>Harita</span>
+                  </a>
+                </div>
+              </div>
+
+              {/* 2. BİLDİRİLEN ARIZA / MÜŞTERİ ŞİKAYETİ */}
+              <div className="card" style={{ padding: '14px', background: 'rgba(245, 158, 11, 0.06)', border: '1px solid rgba(245, 158, 11, 0.25)', borderRadius: '14px' }}>
+                <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <AlertTriangle size={15} />
+                  <span>BİLDİRİLEN ARIZA / ŞİKAYET</span>
+                </div>
+                <p style={{ fontSize: '0.98rem', fontWeight: 600, color: 'var(--text-main)', margin: '0 0 10px 0', lineHeight: 1.45 }}>
+                  {inspectingTicket.reportedFault}
+                </p>
+                <div style={{ display: 'flex', gap: '12px', fontSize: '0.82rem', color: 'var(--text-muted)', borderTop: '1px dashed rgba(255,255,255,0.08)', paddingTop: '8px' }}>
+                  <span>Garanti Durumu: <strong style={{ color: inspectingTicket.warrantyStatus === 'warranty' ? '#10b981' : 'var(--text-main)' }}>{inspectingTicket.warrantyStatus === 'warranty' ? 'Garantili' : 'Garanti Dışı'}</strong></span>
+                </div>
+              </div>
+
+              {/* 3. İŞ EMRİ DURUMU (TEK SIRA SEÇİM) */}
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label" style={{ fontWeight: 700, fontSize: '0.88rem' }}>
+                  📋 İş Emri Durumu
+                </label>
+                <select 
+                  className="form-control"
+                  style={{ height: '48px', fontSize: '0.95rem', fontWeight: 600, borderRadius: '10px' }}
+                  value={inspectStatus}
+                  onChange={e => setInspectStatus(e.target.value as any)}
+                >
+                  <option value="scheduled">⏳ Ziyaret Planlandı / Yolda</option>
+                  <option value="in_repair">🔧 İş Alındı / Onarımda</option>
+                  <option value="waiting_parts">📦 Parça Bekleniyor (Tedarikte)</option>
+                  <option value="ready">✅ Onarım Tamamlandı / Teslime Hazır</option>
+                  <option value="delivered">🏁 Teslim & Tahsil Edildi (İşi Kapat)</option>
+                  <option value="cancelled">❌ İptal / İade</option>
+                </select>
+              </div>
+
+              {/* 4. USTA TEŞHİSİ VE YAPILAN İŞLEM NOTU */}
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label" style={{ fontWeight: 700, fontSize: '0.88rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Wrench size={16} color="var(--primary)" />
+                  <span>Usta Teşhisi & Yapılan İşlem Notu</span>
+                </label>
+                <textarea 
+                  className="form-control"
+                  rows={3}
+                  style={{ fontSize: '0.92rem', lineHeight: 1.45, borderRadius: '10px' }}
+                  placeholder="Yapılan onarım, tespit edilen arıza ve teknik açıklamayı buraya yazınız..."
+                  value={inspectDiagnosis}
+                  onChange={e => setInspectDiagnosis(e.target.value)}
+                />
+              </div>
+
+              {/* 5. KULLANILAN YEDEK PARÇALAR */}
+              <div className="card" style={{ padding: '14px', borderRadius: '14px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                  <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--primary)', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Package size={15} />
+                    <span>YEDEK PARÇALAR ({inspectParts.length})</span>
+                  </div>
+                  <button 
+                    type="button" 
+                    className="btn btn-secondary btn-sm"
+                    style={{ borderRadius: '8px' }}
+                    onClick={() => setIsAddingPart(!isAddingPart)}
+                  >
+                    <Plus size={14} />
+                    <span>{isAddingPart ? 'Kapat' : 'Parça Ekle'}</span>
+                  </button>
+                </div>
+
+                {inspectParts.length === 0 ? (
+                  <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: 0 }}>
+                    Henüz fişe yedek parça eklenmedi.
+                  </p>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {inspectParts.map(p => (
+                      <div 
+                        key={p.id}
+                        style={{ 
+                          display: 'flex', 
+                          justifyContent: 'space-between', 
+                          alignItems: 'center',
+                          padding: '10px 12px',
+                          background: 'rgba(255, 255, 255, 0.04)',
+                          borderRadius: '10px',
+                          fontSize: '0.88rem'
+                        }}
+                      >
+                        <div>
+                          <strong style={{ color: 'var(--text-main)' }}>{p.partName}</strong>
+                          <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                            {p.quantity} Adet × {formatCurrency(p.unitPrice)}
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                          <strong style={{ color: 'var(--emerald)', fontSize: '0.95rem' }}>{formatCurrency(p.totalPrice)}</strong>
+                          <button 
+                            type="button" 
+                            onClick={() => handleRemovePartFromInspect(p.id)}
+                            style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '4px' }}
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Parça Ekleme Alanı (Tek Sıra Akış) */}
+                {isAddingPart && (
+                  <div style={{ marginTop: '12px', padding: '12px', background: 'rgba(59, 130, 246, 0.06)', borderRadius: '12px', border: '1px solid rgba(59, 130, 246, 0.25)', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                      <label className="form-label" style={{ fontSize: '0.8rem', fontWeight: 600 }}>Stok Kataloğundan Seç:</label>
+                      <select 
+                        className="form-control"
+                        style={{ height: '42px', fontSize: '0.88rem' }}
+                        value={stockPartId}
+                        onChange={e => {
+                          const pid = e.target.value;
+                          setStockPartId(pid);
+                          if (pid) {
+                            const p = parts.find(x => x.id === pid);
+                            if (p) {
+                              setPartPrice(p.salePrice);
+                              setCustomPartName('');
+                            }
+                          }
+                        }}
+                      >
+                        <option value="">-- Stoktan Parça Seçiniz --</option>
+                        {parts.map(p => (
+                          <option key={p.id} value={p.id}>
+                            {p.name} ({p.code}) - {p.salePrice} TL [Stok: {p.quantity}]
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {!stockPartId && (
+                      <div className="form-group" style={{ marginBottom: 0 }}>
+                        <label className="form-label" style={{ fontSize: '0.8rem', fontWeight: 600 }}>Veya Özel Parça Adı:</label>
+                        <input 
+                          type="text" 
+                          className="form-control" 
+                          style={{ height: '42px', fontSize: '0.88rem' }}
+                          placeholder="Örn: Kazan Körük Lastiği"
+                          value={customPartName}
+                          onChange={e => setCustomPartName(e.target.value)}
+                        />
+                      </div>
+                    )}
+
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                      <label className="form-label" style={{ fontSize: '0.8rem', fontWeight: 600 }}>Birim Satış Fiyatı (TL):</label>
+                      <input 
+                        type="number" 
+                        className="form-control" 
+                        style={{ height: '42px', fontSize: '0.95rem' }}
+                        value={partPrice}
+                        onChange={e => setPartPrice(parseFloat(e.target.value) || 0)}
+                      />
+                    </div>
+
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                      <label className="form-label" style={{ fontSize: '0.8rem', fontWeight: 600 }}>Adet:</label>
+                      <input 
+                        type="number" 
+                        min={1}
+                        className="form-control" 
+                        style={{ height: '42px', fontSize: '0.95rem' }}
+                        value={partQty}
+                        onChange={e => setPartQty(parseInt(e.target.value, 10) || 1)}
+                      />
+                    </div>
+
+                    <button 
+                      type="button" 
+                      className="btn btn-primary"
+                      style={{ width: '100%', height: '42px', justifyContent: 'center', fontWeight: 700 }}
+                      onClick={handleAddPartToInspect}
+                    >
+                      <Plus size={16} />
+                      <span>Fişe Parçayı Ekle</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* 6. HESAP DÖKÜMÜ & MALİYETLER (TEK SIRA DÜZEN) */}
+              <div className="card" style={{ padding: '14px', borderRadius: '14px' }}>
+                <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--emerald)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <DollarSign size={15} />
+                  <span>MALİYET & HESAP DÖKÜMÜ</span>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label" style={{ fontSize: '0.84rem', fontWeight: 600 }}>İşçilik Bedeli (TL):</label>
+                    <input 
+                      type="number" 
+                      className="form-control" 
+                      style={{ height: '44px', fontSize: '1rem', fontWeight: 700 }}
+                      value={inspectLaborCost}
+                      onChange={e => setInspectLaborCost(parseFloat(e.target.value) || 0)}
+                    />
+                  </div>
+
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label" style={{ fontSize: '0.84rem', fontWeight: 600 }}>Servis / Yol Bedeli (TL):</label>
+                    <input 
+                      type="number" 
+                      className="form-control" 
+                      style={{ height: '44px', fontSize: '1rem', fontWeight: 700 }}
+                      value={inspectTransportCost}
+                      onChange={e => setInspectTransportCost(parseFloat(e.target.value) || 0)}
+                    />
+                  </div>
+
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label" style={{ fontSize: '0.84rem', fontWeight: 600 }}>İndirim Tutarı (TL):</label>
+                    <input 
+                      type="number" 
+                      className="form-control" 
+                      style={{ height: '44px', fontSize: '1rem', fontWeight: 700 }}
+                      value={inspectDiscount}
+                      onChange={e => setInspectDiscount(parseFloat(e.target.value) || 0)}
+                    />
+                  </div>
+
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label" style={{ fontSize: '0.84rem', fontWeight: 600 }}>Ödeme Şekli:</label>
+                    <select 
+                      className="form-control"
+                      style={{ height: '44px', fontSize: '0.92rem', fontWeight: 600 }}
+                      value={inspectPaymentMethod}
+                      onChange={e => setInspectPaymentMethod(e.target.value as any)}
+                    >
+                      <option value="cash">💵 Nakit</option>
+                      <option value="credit_card">💳 Kredi Kartı / POS</option>
+                      <option value="bank_transfer">🏦 IBAN / Havale</option>
+                    </select>
+                  </div>
+
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label" style={{ fontSize: '0.84rem', fontWeight: 600 }}>Ödeme Durumu:</label>
+                    <select 
+                      className="form-control"
+                      style={{ height: '44px', fontSize: '0.92rem', fontWeight: 600 }}
+                      value={inspectPaymentStatus}
+                      onChange={e => setInspectPaymentStatus(e.target.value as any)}
+                    >
+                      <option value="unpaid">⏳ Ödeme Bekliyor (Tahsil Edilmedi)</option>
+                      <option value="pending_approval">💰 Tahsil Edildi (Ofis Onayına Gönder)</option>
+                      <option value="paid">✅ Tahsil Edildi (Onaylandı)</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* BÜYÜK TOPLAM TUTAR KUTUSU */}
+                <div style={{ 
+                  marginTop: '16px',
+                  background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.22) 0%, rgba(5, 150, 105, 0.12) 100%)', 
+                  border: '1px solid rgba(16, 185, 129, 0.45)', 
+                  borderRadius: '14px', 
+                  padding: '16px', 
+                  textAlign: 'center'
+                }}>
+                  <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-muted)', display: 'block', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>
+                    MÜŞTERİYE ÇIKAN GENEL TOPLAM
+                  </span>
+                  <div style={{ fontSize: '2rem', fontWeight: 900, color: '#10b981', letterSpacing: '-0.5px' }}>
+                    {formatCurrency(Math.max(0, inspectParts.reduce((s, p) => s + p.totalPrice, 0) + inspectLaborCost + inspectTransportCost - inspectDiscount))}
+                  </div>
+                  <span style={{ fontSize: '0.82rem', color: inspectPaymentStatus === 'paid' ? '#34d399' : inspectPaymentStatus === 'pending_approval' ? '#fbbf24' : '#ef4444', fontWeight: 700, display: 'block', marginTop: '4px' }}>
+                    {inspectPaymentStatus === 'paid' ? '● Tahsil Edildi (Onaylandı)' : inspectPaymentStatus === 'pending_approval' ? '⏳ Tahsilat Alındı (Ofis Onayı Bekliyor)' : '○ Ödeme Bekliyor'} ({inspectPaymentMethod === 'cash' ? 'Nakit' : inspectPaymentMethod === 'credit_card' ? 'Kredi Kartı' : 'Havale'})
+                  </span>
+                </div>
+
+                {/* WhatsApp Servis Fişi Paylaşımı */}
+                <a 
+                  href={generateReceiptWhatsApp(inspectingTicket)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="btn btn-whatsapp"
+                  style={{ width: '100%', marginTop: '14px', padding: '13px', fontSize: '0.9rem', fontWeight: 700, justifyContent: 'center', borderRadius: '12px' }}
+                >
+                  <Share2 size={16} />
+                  <span>Müşteriye WhatsApp Fişi Gönder</span>
+                </a>
+              </div>
+
+              {/* 7. ALT AKSİYON BUTONLARI (TEK SIRA / DİKEY) */}
+              <div style={{ 
+                display: 'flex', 
+                flexDirection: 'column', 
+                gap: '8px', 
+                marginTop: '10px',
+                paddingTop: '14px',
+                borderTop: '1px solid var(--border-subtle)'
+              }}>
+                <button 
+                  type="button" 
+                  className="btn btn-success" 
+                  style={{ 
+                    width: '100%', 
+                    background: 'linear-gradient(135deg, #10b981, #059669)', 
+                    fontWeight: 900, 
+                    padding: '14px',
+                    fontSize: '0.98rem',
+                    justifyContent: 'center',
+                    borderRadius: '12px',
+                    boxShadow: '0 4px 14px rgba(16, 185, 129, 0.35)'
+                  }}
+                  onClick={() => handleSaveInspection(true)}
+                >
+                  <CheckCircle2 size={18} />
+                  <span>Tahsil Edildi & İşi Tamamla (Kapat)</span>
+                </button>
+
+                <button 
+                  type="button" 
+                  className="btn btn-primary" 
+                  style={{ 
+                    width: '100%', 
+                    fontWeight: 800, 
+                    padding: '13px',
+                    fontSize: '0.95rem',
+                    justifyContent: 'center',
+                    borderRadius: '12px'
+                  }}
+                  onClick={() => handleSaveInspection(false)}
+                >
+                  <Check size={17} />
+                  <span>Değişiklikleri Kaydet</span>
+                </button>
+
+                <button 
+                  type="button" 
+                  className="btn btn-secondary" 
+                  style={{ 
+                    width: '100%', 
+                    padding: '11px',
+                    fontSize: '0.9rem',
+                    justifyContent: 'center',
+                    borderRadius: '12px'
+                  }}
+                  onClick={() => setInspectingTicket(null)}
+                >
+                  Kapat
+                </button>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 1: SADECE SERVİS ÜCRETİNE DÖNDÜ (TEK SIRA) */}
+      {isServiceFeeModalOpen && selectedTicket && (
+        <div className="modal-overlay" onClick={() => setIsServiceFeeModalOpen(false)} style={{ padding: '10px' }}>
+          <div className="modal-box" onClick={e => e.stopPropagation()} style={{ maxWidth: '460px', width: '100%', borderRadius: '18px', padding: '16px' }}>
+            <div className="modal-header" style={{ padding: '0 0 12px 0', marginBottom: '12px', borderBottom: '1px solid var(--border-subtle)' }}>
+              <div>
+                <h3 style={{ color: '#ef4444', fontSize: '1.15rem', margin: 0 }}>Servis Ücreti Tahsilatı</h3>
+                <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
                   {selectedTicket.ticketNumber} - {selectedTicket.customerName}
                 </p>
               </div>
@@ -568,67 +1504,79 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
               </button>
             </div>
 
-            <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-              <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.25)', borderRadius: 'var(--radius-sm)', padding: '10px 12px', fontSize: '0.85rem', color: '#f87171' }}>
-                Müşteri cihaz onarımını kabul etmediğinde veya arıza bulunmadığında sadece yol / servis arıza tespit bedeli giriniz.
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.25)', borderRadius: '10px', padding: '10px 12px', fontSize: '0.85rem', color: '#f87171' }}>
+                Müşteri cihaz onarımını kabul etmediğinde sadece arıza tespit / yol servis bedeli giriniz.
               </div>
 
               <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label">Alınan Servis Bedeli (TL) *</label>
+                <label className="form-label" style={{ fontWeight: 600 }}>Alınan Servis Bedeli (TL) *</label>
                 <input 
                   type="number" 
                   className="form-control" 
-                  style={{ fontSize: '1.2rem', fontWeight: 800 }}
+                  style={{ fontSize: '1.25rem', fontWeight: 800, height: '46px', borderRadius: '10px' }}
                   value={serviceFeeAmount}
                   onChange={e => setServiceFeeAmount(e.target.value)}
                 />
               </div>
 
               <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label">Ödeme Şekli</label>
+                <label className="form-label" style={{ fontWeight: 600 }}>Ödeme Şekli</label>
                 <select 
                   className="form-control"
+                  style={{ height: '44px', fontSize: '0.92rem', borderRadius: '10px' }}
                   value={serviceFeeMethod}
                   onChange={e => setServiceFeeMethod(e.target.value as any)}
                 >
-                  <option value="cash">Nakit Aldım</option>
-                  <option value="credit_card">Kredi Kartı / POS Çekildi</option>
-                  <option value="bank_transfer">IBAN / Havale Gönderildi</option>
+                  <option value="cash">💵 Nakit Aldım</option>
+                  <option value="credit_card">💳 Kredi Kartı / POS Çekildi</option>
+                  <option value="bank_transfer">🏦 IBAN / Havale Gönderildi</option>
                 </select>
               </div>
 
               <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label">Usta Notu</label>
+                <label className="form-label" style={{ fontWeight: 600 }}>Usta Notu</label>
                 <input 
                   type="text" 
                   className="form-control" 
+                  style={{ height: '44px', fontSize: '0.9rem', borderRadius: '10px' }}
                   value={serviceFeeNote}
                   onChange={e => setServiceFeeNote(e.target.value)}
                 />
               </div>
             </div>
 
-            <div className="modal-footer">
-              <button type="button" className="btn btn-secondary" onClick={() => setIsServiceFeeModalOpen(false)}>
-                Vazgeç
-              </button>
-              <button type="button" className="btn btn-primary" onClick={handleConfirmServiceFee}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '16px', paddingTop: '12px', borderTop: '1px solid var(--border-subtle)' }}>
+              <button 
+                type="button" 
+                className="btn btn-primary" 
+                style={{ width: '100%', height: '46px', fontSize: '0.95rem', fontWeight: 800, justifyContent: 'center', borderRadius: '10px', background: 'linear-gradient(135deg, #ef4444, #dc2626)' }}
+                onClick={handleConfirmServiceFee}
+              >
                 <Check size={18} />
                 <span>Tahsil Edildi & Fişi Kapat</span>
+              </button>
+              <button 
+                type="button" 
+                className="btn btn-secondary" 
+                style={{ width: '100%', height: '42px', fontSize: '0.88rem', justifyContent: 'center', borderRadius: '10px' }}
+                onClick={() => setIsServiceFeeModalOpen(false)}
+              >
+                Vazgeç
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* MODAL 2: İŞ ALINDI / PARÇA VE TUTAR GİRİŞİ */}
+      {/* MODAL 2: İŞ ALINDI / PARÇA VE TUTAR GİRİŞİ (TEK SIRA) */}
       {isJobAcceptedModalOpen && selectedTicket && (
-        <div className="modal-overlay" onClick={() => setIsJobAcceptedModalOpen(false)}>
-          <div className="modal-box" onClick={e => e.stopPropagation()} style={{ maxWidth: '520px' }}>
-            <div className="modal-header">
+        <div className="modal-overlay" onClick={() => setIsJobAcceptedModalOpen(false)} style={{ padding: '10px' }}>
+          <div className="modal-box" onClick={e => e.stopPropagation()} style={{ maxWidth: '480px', width: '100%', borderRadius: '18px', padding: '16px' }}>
+            <div className="modal-header" style={{ padding: '0 0 12px 0', marginBottom: '12px', borderBottom: '1px solid var(--border-subtle)' }}>
               <div>
-                <h3 style={{ color: 'var(--primary)' }}>İş Alındı & Onarım Girişi</h3>
-                <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
+                <h3 style={{ color: 'var(--primary)', fontSize: '1.15rem', margin: 0 }}>İş Alındı & Onarım Girişi</h3>
+                <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
                   {selectedTicket.ticketNumber} - {selectedTicket.brand} {selectedTicket.model}
                 </p>
               </div>
@@ -637,82 +1585,93 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
               </button>
             </div>
 
-            <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label">Arıza Tespiti & Değişecek Parça Açıklaması *</label>
+                <label className="form-label" style={{ fontWeight: 600 }}>Arıza Tespiti & Açıklama *</label>
                 <textarea 
-                  className="form-control"
+                  className="form-control" 
                   rows={2}
+                  style={{ fontSize: '0.92rem', borderRadius: '10px' }}
                   placeholder="Örn: Tahliye pompası sargısı yanmış, kazan amortisörleri patlak."
                   value={repairDiagnosis}
                   onChange={e => setRepairDiagnosis(e.target.value)}
                 />
               </div>
 
-              <div className="grid-2">
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Değişecek Parça Adı</label>
-                  <input 
-                    type="text" 
-                    className="form-control" 
-                    placeholder="Örn: Arçelik Tahliye Pompası"
-                    value={repairPartName}
-                    onChange={e => setRepairPartName(e.target.value)}
-                  />
-                </div>
-
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Parça Fiyatı (TL)</label>
-                  <input 
-                    type="number" 
-                    className="form-control" 
-                    value={repairPartPrice}
-                    onChange={e => setRepairPartPrice(e.target.value)}
-                  />
-                </div>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label" style={{ fontWeight: 600 }}>Değişecek Parça Adı</label>
+                <input 
+                  type="text" 
+                  className="form-control" 
+                  style={{ height: '44px', fontSize: '0.9rem', borderRadius: '10px' }}
+                  placeholder="Örn: Arçelik Tahliye Pompası"
+                  value={repairPartName}
+                  onChange={e => setRepairPartName(e.target.value)}
+                />
               </div>
 
-              <div className="grid-2">
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">İşçilik Tutarı (TL)</label>
-                  <input 
-                    type="number" 
-                    className="form-control" 
-                    value={repairLaborPrice}
-                    onChange={e => setRepairLaborPrice(e.target.value)}
-                  />
-                </div>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label" style={{ fontWeight: 600 }}>Parça Satış Fiyatı (TL)</label>
+                <input 
+                  type="number" 
+                  className="form-control" 
+                  style={{ height: '44px', fontSize: '0.95rem', borderRadius: '10px' }}
+                  value={repairPartPrice}
+                  onChange={e => setRepairPartPrice(e.target.value)}
+                />
+              </div>
 
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Yeni İş Durumu</label>
-                  <select 
-                    className="form-control"
-                    value={repairStatus}
-                    onChange={e => setRepairStatus(e.target.value as any)}
-                  >
-                    <option value="in_repair">Onarımda / İnceleniyor</option>
-                    <option value="waiting_parts">Parça Bekleniyor (Toptancıdan)</option>
-                    <option value="ready">Onarım Bitti / Testte Hazır</option>
-                  </select>
-                </div>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label" style={{ fontWeight: 600 }}>İşçilik Tutarı (TL)</label>
+                <input 
+                  type="number" 
+                  className="form-control" 
+                  style={{ height: '44px', fontSize: '0.95rem', borderRadius: '10px' }}
+                  value={repairLaborPrice}
+                  onChange={e => setRepairLaborPrice(e.target.value)}
+                />
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label" style={{ fontWeight: 600 }}>Yeni İş Durumu</label>
+                <select 
+                  className="form-control"
+                  style={{ height: '44px', fontSize: '0.92rem', borderRadius: '10px' }}
+                  value={repairStatus}
+                  onChange={e => setRepairStatus(e.target.value as any)}
+                >
+                  <option value="in_repair">🔧 Onarımda / İnceleniyor</option>
+                  <option value="waiting_parts">📦 Parça Bekleniyor (Toptancıdan)</option>
+                  <option value="ready">✅ Onarım Bitti / Testte Hazır</option>
+                </select>
               </div>
 
               {/* Tutar Özeti */}
-              <div style={{ background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.25)', borderRadius: 'var(--radius-sm)', padding: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: '0.9rem', color: 'var(--primary)', fontWeight: 600 }}>Müşteriye Verilen Toplam Tutar:</span>
+              <div style={{ background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.25)', borderRadius: '10px', padding: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: '0.88rem', color: 'var(--primary)', fontWeight: 600 }}>Toplam Tutar:</span>
                 <strong style={{ fontSize: '1.25rem', color: 'var(--text-main)' }}>
                   {formatCurrency((parseFloat(repairPartPrice) || 0) + (parseFloat(repairLaborPrice) || 0))}
                 </strong>
               </div>
             </div>
 
-            <div className="modal-footer">
-              <button type="button" className="btn btn-secondary" onClick={() => setIsJobAcceptedModalOpen(false)}>
-                Vazgeç
-              </button>
-              <button type="button" className="btn btn-primary" onClick={handleConfirmJobAccepted}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '16px', paddingTop: '12px', borderTop: '1px solid var(--border-subtle)' }}>
+              <button 
+                type="button" 
+                className="btn btn-primary" 
+                style={{ width: '100%', height: '46px', fontSize: '0.95rem', fontWeight: 800, justifyContent: 'center', borderRadius: '10px' }}
+                onClick={handleConfirmJobAccepted}
+              >
                 <Check size={18} />
                 <span>Kaydet & Ofise İlet</span>
+              </button>
+              <button 
+                type="button" 
+                className="btn btn-secondary" 
+                style={{ width: '100%', height: '42px', fontSize: '0.88rem', justifyContent: 'center', borderRadius: '10px' }}
+                onClick={() => setIsJobAcceptedModalOpen(false)}
+              >
+                Vazgeç
               </button>
             </div>
           </div>

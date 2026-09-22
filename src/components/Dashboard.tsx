@@ -11,7 +11,9 @@ import {
   MessageSquare, 
   ArrowRight,
   Sparkles,
-  Calendar
+  Calendar,
+  Package,
+  Users
 } from 'lucide-react';
 import { ServiceTicket, SparePart, Customer } from '../types';
 import { 
@@ -21,7 +23,11 @@ import {
   priorityConfig, 
   deviceTypeConfig,
   generateWhatsAppLink,
-  cleanPhoneForWhatsApp
+  cleanPhoneForWhatsApp,
+  getLocalDateString,
+  isTicketCompleted,
+  isUpcomingTicket,
+  isTodayTicket
 } from '../utils/helpers';
 
 interface DashboardProps {
@@ -33,6 +39,7 @@ interface DashboardProps {
   onOpenNewCustomer: () => void;
   onOpenNewPart: () => void;
   onNavigateToTab: (tab: string) => void;
+  onApprovePayment?: (ticketId: string) => void;
   shopName: string;
   shopPhone: string;
 }
@@ -46,15 +53,27 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onOpenNewCustomer,
   onOpenNewPart,
   onNavigateToTab,
+  onApprovePayment,
   shopName,
   shopPhone,
 }) => {
-  // Hesaplamalar
-  const openTickets = tickets.filter(t => t.status !== 'delivered' && t.status !== 'cancelled');
-  const urgentTickets = openTickets.filter(t => t.priority === 'urgent');
-  const waitingPartsTickets = openTickets.filter(t => t.status === 'waiting_parts');
-  const readyTickets = tickets.filter(t => t.status === 'ready');
+  // Yerel Saat Dilimine Göre Bugünün Tarihi (YYYY-MM-DD)
+  const todayStr = getLocalDateString();
+
+  // 1. Bugünün ve Dünden Devreden Açık Servisleri (Bitmeyen, parça bekleyen veya ödeme bekleyen tüm işler)
+  const todayTickets = tickets.filter(t => isTodayTicket(t, todayStr));
+
+  // 2. İleri Tarihli Randevular: Randevusu gelecekte olan açık işler (o gün gelene kadar burada tutulur)
+  const upcomingTickets = tickets.filter(t => isUpcomingTicket(t, todayStr));
+
+  // 3. Tamamlanan & Tahsil Edilenler: Hem teslim edilmiş hem de tahsilatı tamamlanmış arşiv kayıtları
+  const completedTickets = tickets.filter(t => isTicketCompleted(t));
+
+  const urgentTickets = todayTickets.filter(t => t.priority === 'urgent');
+  // Atölyede veya sahada parça bekleyen TÜM açık işler
+  const waitingPartsTickets = tickets.filter(t => t.status === 'waiting_parts');
   const lowStockParts = parts.filter(p => p.quantity <= p.minStockLevel);
+  const pendingApprovalTickets = tickets.filter(t => t.paymentStatus === 'pending_approval');
 
   const totalEarnings = tickets
     .filter(t => t.paymentStatus === 'paid')
@@ -72,9 +91,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
       <div className="top-header">
         <div className="page-title">
           <h2>Teknik Servis Yönetim Paneli</h2>
-          <p>Hoş geldiniz! Güncel servis talepleri, parça durumları ve dükkan performansı.</p>
+          <p>{shopName} • Genel Durum, Randevular ve Anlık Saha Takibi</p>
         </div>
         <div className="header-actions">
+          <button className="btn btn-secondary" onClick={onOpenNewPart}>
+            <Package size={18} />
+            <span>Yedek Parça Ekle</span>
+          </button>
+          <button className="btn btn-secondary" onClick={onOpenNewCustomer}>
+            <Users size={18} />
+            <span>Yeni Müşteri</span>
+          </button>
           <button className="btn btn-primary" onClick={onOpenNewTicket}>
             <Plus size={18} />
             <span>Hızlı Servis Fişi Aç</span>
@@ -82,15 +109,107 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
       </div>
 
+      {/* 🔔 ONAY BEKLEYEN SAHA TAHSİLATLARI KARTI */}
+      {pendingApprovalTickets.length > 0 && (
+        <div 
+          className="card"
+          style={{ 
+            marginBottom: '20px', 
+            background: 'linear-gradient(135deg, rgba(245, 158, 11, 0.15) 0%, rgba(217, 119, 6, 0.08) 100%)', 
+            borderColor: 'rgba(245, 158, 11, 0.4)',
+            padding: '16px 20px',
+            borderRadius: '16px',
+            boxShadow: '0 4px 18px rgba(245, 158, 11, 0.12)'
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px', marginBottom: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span style={{ fontSize: '1.4rem' }}>🔔</span>
+              <div>
+                <strong style={{ fontSize: '1.05rem', color: '#f59e0b' }}>
+                  {pendingApprovalTickets.length} Adet Saha Tahsilatı Ofis Onayı Bekliyor!
+                </strong>
+                <div style={{ fontSize: '0.84rem', color: 'var(--text-muted)' }}>
+                  Saha ustası ödemeyi müşteriden tahsil etti. Ücret ofise ulaştıysa onaylayınız; gelir ve varsa parça gideri kasaya otomatik işlenecektir.
+                </div>
+              </div>
+            </div>
+            <button 
+              className="btn btn-secondary btn-sm"
+              onClick={() => onNavigateToTab('tickets')}
+              style={{ fontSize: '0.82rem', padding: '7px 12px', fontWeight: 700 }}
+            >
+              Fiş Listesinde Filtrele
+            </button>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '10px' }}>
+            {pendingApprovalTickets.map(pt => {
+              const partsCost = (pt.partsUsed || []).reduce((s, p) => s + (p.totalPrice || 0), 0);
+              const amount = pt.paidAmount || pt.totalAmount || 0;
+              return (
+                <div 
+                  key={pt.id}
+                  style={{
+                    background: 'var(--bg-card)',
+                    border: '1px solid rgba(245, 158, 11, 0.25)',
+                    borderRadius: '12px',
+                    padding: '12px 14px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'space-between',
+                    gap: '10px'
+                  }}
+                >
+                  <div style={{ cursor: 'pointer' }} onClick={() => onSelectTicket(pt)}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                      <strong style={{ fontSize: '0.92rem', color: 'var(--text-main)' }}>{pt.ticketNumber}</strong>
+                      <span className="badge" style={{ background: 'rgba(245, 158, 11, 0.2)', color: '#f59e0b', fontSize: '0.74rem', fontWeight: 700 }}>
+                        {pt.paymentMethod === 'cash' ? 'Nakit' : pt.paymentMethod === 'credit_card' ? 'Kredi Kartı' : 'Havale'}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-main)' }}>{pt.customerName}</div>
+                    <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>{pt.brand} {pt.model}</div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px', fontSize: '0.84rem' }}>
+                      <span style={{ fontWeight: 800, color: '#10b981' }}>Tahsilat: {formatCurrency(amount)}</span>
+                      {partsCost > 0 && (
+                        <span style={{ fontSize: '0.75rem', color: '#f87171' }}>Parça: -{formatCurrency(partsCost)}</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <button 
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    style={{ 
+                      width: '100%', 
+                      background: 'linear-gradient(135deg, #10b981, #059669)', 
+                      border: 'none', 
+                      fontWeight: 800,
+                      justifyContent: 'center',
+                      padding: '8px'
+                    }}
+                    onClick={() => onApprovePayment && onApprovePayment(pt.id)}
+                  >
+                    <CheckCircle2 size={16} />
+                    <span>Tahsilatı Onayla & Kasaya Yaz</span>
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Metric Cards Grid */}
       <div className="metrics-grid">
         <div className="card metric-card" style={{ '--accent-gradient': 'linear-gradient(90deg, #3b82f6, #60a5fa)' } as React.CSSProperties}>
           <div className="metric-icon" style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#3b82f6' }}>
-            <Wrench size={26} />
+            <Calendar size={26} />
           </div>
           <div className="metric-data">
-            <h3>{openTickets.length}</h3>
-            <p>Aktif / Açık Fişler</p>
+            <h3>{todayTickets.length}</h3>
+            <p>Bugünün Servisleri</p>
           </div>
         </div>
 
@@ -104,13 +223,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
           </div>
         </div>
 
-        <div className="card metric-card" style={{ '--accent-gradient': 'linear-gradient(90deg, #ec4899, #f472b6)' } as React.CSSProperties}>
-          <div className="metric-icon" style={{ background: 'rgba(236, 72, 153, 0.15)', color: '#ec4899' }}>
+        <div className="card metric-card" style={{ '--accent-gradient': 'linear-gradient(90deg, #8b5cf6, #a78bfa)' } as React.CSSProperties}>
+          <div className="metric-icon" style={{ background: 'rgba(139, 92, 246, 0.15)', color: '#8b5cf6' }}>
             <Clock size={26} />
           </div>
           <div className="metric-data">
-            <h3>{waitingPartsTickets.length}</h3>
-            <p>Parça Bekleyen</p>
+            <h3>{upcomingTickets.length}</h3>
+            <p>İleri Tarihli Randevu</p>
           </div>
         </div>
 
@@ -124,6 +243,41 @@ export const Dashboard: React.FC<DashboardProps> = ({
           </div>
         </div>
       </div>
+
+      {/* İleri Tarihli Randevular Bilgilendirme Kartı */}
+      {upcomingTickets.length > 0 && (
+        <div 
+          className="card"
+          style={{ 
+            marginBottom: '18px', 
+            background: 'rgba(139, 92, 246, 0.08)', 
+            borderColor: 'rgba(139, 92, 246, 0.25)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '12px 18px',
+            flexWrap: 'wrap',
+            gap: '10px'
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <Clock size={22} color="#8b5cf6" />
+            <div>
+              <strong style={{ color: '#a78bfa' }}>{upcomingTickets.length} adet ileri tarihli randevunuz var!</strong>
+              <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
+                Bu işler tarihi geldiğinde otomatik olarak "Bugünün Servisleri"ne eklenecektir.
+              </div>
+            </div>
+          </div>
+          <button 
+            className="btn btn-secondary btn-sm"
+            onClick={() => onNavigateToTab('tickets')}
+            style={{ fontSize: '0.8rem', padding: '6px 12px' }}
+          >
+            Randevuları Gör
+          </button>
+        </div>
+      )}
 
       {/* Quick Alert Banner for Low Stock */}
       {lowStockParts.length > 0 && (
@@ -167,24 +321,25 @@ export const Dashboard: React.FC<DashboardProps> = ({
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <Clock size={20} color="var(--primary)" />
-                <h3 style={{ fontSize: '1.15rem', fontWeight: 700 }}>İşlemdeki & Öncelikli Servis Fişleri</h3>
+                <h3 style={{ fontSize: '1.15rem', fontWeight: 700 }}>Bugünün Açık Servis Fişleri ({todayTickets.length})</h3>
               </div>
               <button 
                 className="btn btn-secondary btn-sm" 
                 onClick={() => onNavigateToTab('tickets')}
               >
-                Tümünü Gör ({tickets.length}) <ArrowRight size={14} />
+                Tüm Fişler ({tickets.length}) <ArrowRight size={14} />
               </button>
             </div>
 
-            {openTickets.length === 0 ? (
+            {todayTickets.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '36px 16px', color: 'var(--text-muted)' }}>
                 <CheckCircle2 size={42} color="var(--emerald)" style={{ marginBottom: '8px' }} />
-                <p>Harika! Şu anda bekleyen açık servis fişi yok.</p>
+                <p>Harika! Bugün için bekleyen açık servis fişi yok.</p>
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                {openTickets.slice(0, 5).map(ticket => {
+                {todayTickets.slice(0, 6).map(ticket => {
+
                   const statusInfo = ticketStatusConfig[ticket.status];
                   const priorityInfo = priorityConfig[ticket.priority];
                   const device = deviceTypeConfig[ticket.deviceType];

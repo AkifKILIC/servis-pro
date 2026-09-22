@@ -20,7 +20,7 @@ export type TicketStatus =
 
 export type Priority = 'low' | 'normal' | 'urgent';
 
-export type PaymentStatus = 'paid' | 'partial' | 'unpaid';
+export type PaymentStatus = 'paid' | 'partial' | 'unpaid' | 'pending_approval';
 export type PaymentMethod = 'cash' | 'credit_card' | 'bank_transfer' | 'other';
 
 export interface Customer {

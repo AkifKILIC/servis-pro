@@ -1,0 +1,27 @@
+# ServisPro Apache & cPanel Yapılandırması
+<IfModule mod_headers.c>
+    Header set Access-Control-Allow-Origin "*"
+    Header set Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
+    Header set Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With"
+    Header set X-Robots-Tag "noindex, nofollow, noarchive"
+</IfModule>
+
+# Dizin listelemeyi kapat
+Options -Indexes
+
+# UTF-8 Desteği
+AddDefaultCharset UTF-8
+
+# SPA (React) Yönlendirmesi
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /servispro/
+    
+    # api.php ve test_db.php gibi fiziksel dosyaları doğrudan çalıştır
+    RewriteCond %{REQUEST_FILENAME} -f [OR]
+    RewriteCond %{REQUEST_FILENAME} -d
+    RewriteRule ^ - [L]
+
+    # Diğer tüm istekleri index.html'e yönlendir
+    RewriteRule . /servispro/index.html [L]
+</IfModule>

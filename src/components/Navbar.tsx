@@ -1,5 +1,5 @@
 import React from 'react';
-import { Menu, PlusCircle, Wrench, Smartphone, Monitor, LogOut } from 'lucide-react';
+import { Menu, PlusCircle, Wrench, Smartphone, Monitor, LogOut, RefreshCw } from 'lucide-react';
 import { ShopSettings } from '../types';
 import { AuthUser } from '../utils/auth';
 
@@ -12,6 +12,9 @@ interface NavbarProps {
   isLiveConnected: boolean;
   currentUser?: AuthUser | null;
   onLogout?: () => void;
+  connectionState?: 'online' | 'offline' | 'syncing';
+  pendingQueueCount?: number;
+  onTriggerSync?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -23,6 +26,9 @@ export const Navbar: React.FC<NavbarProps> = ({
   isLiveConnected,
   currentUser,
   onLogout,
+  connectionState = 'online',
+  pendingQueueCount = 0,
+  onTriggerSync,
 }) => {
   const isTechMode = activeTab === 'technician';
 
@@ -77,24 +83,82 @@ export const Navbar: React.FC<NavbarProps> = ({
           )}
         </div>
 
-        {/* Canlı Bağlantı Rozeti */}
-        <div 
+        {/* Canlı Bağlantı Rozeti & Manuel Senkronizasyon Butonu */}
+        <button 
+          type="button"
+          onClick={onTriggerSync}
           style={{ 
             display: 'flex', 
             alignItems: 'center', 
             gap: '6px', 
             fontSize: '0.72rem', 
-            padding: '2px 8px', 
+            padding: '3px 10px', 
             borderRadius: 'var(--radius-pill)', 
-            background: isLiveConnected ? 'rgba(16, 185, 129, 0.15)' : 'rgba(148, 163, 184, 0.15)',
-            color: isLiveConnected ? '#10b981' : 'var(--text-dim)',
-            fontWeight: 600
+            background: connectionState === 'online' 
+              ? 'rgba(16, 185, 129, 0.15)' 
+              : connectionState === 'syncing'
+              ? 'rgba(59, 130, 246, 0.18)'
+              : 'rgba(245, 158, 11, 0.18)',
+            color: connectionState === 'online' 
+              ? '#10b981' 
+              : connectionState === 'syncing'
+              ? '#3b82f6'
+              : '#f59e0b',
+            fontWeight: 600,
+            border: '1px solid ' + (connectionState === 'online' ? 'rgba(16, 185, 129, 0.3)' : connectionState === 'syncing' ? 'rgba(59, 130, 246, 0.3)' : 'rgba(245, 158, 11, 0.3)'),
+            cursor: 'pointer',
+            transition: 'all 0.2s ease'
           }}
-          title={isLiveConnected ? 'PC ve iPhone arasında canlı eşitleme aktif' : 'Yerel mod / Çevrimdışı'}
+          title={
+            connectionState === 'online' 
+              ? '🟢 Çevrimiçi: MySQL ile anlık eşitleniyor. Tıklayarak verileri tazeleyebilirsiniz.' 
+              : connectionState === 'syncing'
+              ? '🔄 Eşitleniyor: Çevrimdışı yapılan işlemler MySQL veritabanına aktarılıyor...'
+              : `🟠 Çevrimdışı (Yerel Mod): İnternet bağlantısı yok. ${pendingQueueCount} bekleyen işlem var. İnternet gelince otomatik aktarılacak.`
+          }
         >
-          <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: isLiveConnected ? '#10b981' : '#64748b' }} />
-          <span>{isLiveConnected ? 'Canlı Eşitleniyor' : 'Yerel Mod'}</span>
-        </div>
+          <span 
+            style={{ 
+              width: '7px', 
+              height: '7px', 
+              borderRadius: '50%', 
+              background: connectionState === 'online' ? '#10b981' : connectionState === 'syncing' ? '#3b82f6' : '#f59e0b',
+              boxShadow: connectionState === 'online' ? '0 0 6px #10b981' : 'none'
+            }} 
+          />
+          <span>
+            {connectionState === 'online' 
+              ? 'MySQL Canlı' 
+              : connectionState === 'syncing'
+              ? 'Eşitleniyor...'
+              : `Çevrimdışı (${pendingQueueCount})`}
+          </span>
+        </button>
+
+        {/* Canlı Yenileme Butonu (Masaüstü & Electron) */}
+        <button
+          type="button"
+          onClick={onTriggerSync}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '6px',
+            padding: '4px 10px',
+            fontSize: '0.74rem',
+            fontWeight: 700,
+            borderRadius: 'var(--radius-pill)',
+            background: connectionState === 'syncing' ? 'rgba(59, 130, 246, 0.25)' : 'rgba(255, 255, 255, 0.08)',
+            color: connectionState === 'syncing' ? 'var(--primary)' : 'var(--text-main)',
+            border: '1px solid var(--border-subtle)',
+            cursor: 'pointer',
+            transition: 'all 0.2s ease'
+          }}
+          title="Tüm verileri MySQL ile tazelemek için tıklayın (Kısayol: F5 veya Ctrl+R)"
+        >
+          <RefreshCw size={13} className={connectionState === 'syncing' ? 'spin-animation' : ''} />
+          <span>{connectionState === 'syncing' ? 'Eşitleniyor...' : 'Yenile'}</span>
+          <span style={{ fontSize: '0.62rem', opacity: 0.6, background: 'rgba(255, 255, 255, 0.12)', padding: '1px 4px', borderRadius: '4px' }}>F5</span>
+        </button>
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
