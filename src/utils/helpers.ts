@@ -47,6 +47,108 @@ export const getLocalDateString = (d: Date = new Date()): string => {
   return `${year}-${month}-${day}`;
 };
 
+// 1 YILLIK SERVİS & PARÇA GARANTİSİ HESAPLAMA
+// Her cihaza teslim tarihinden itibaren 1 yıl (365 gün) garanti verilir.
+export interface ServiceWarrantyInfo {
+  hasStarted: boolean;
+  startDate?: string;
+  endDate?: string;
+  startDateFormatted: string;
+  endDateFormatted: string;
+  remainingDays: number;
+  totalDays: number;
+  percentRemaining: number;
+  isExpired: boolean;
+  statusBadge: {
+    text: string;
+    color: string;
+    bg: string;
+    border: string;
+  };
+}
+
+export const calculateServiceWarranty = (ticket: ServiceTicket): ServiceWarrantyInfo => {
+  const isDelivered = ticket.status === 'delivered' || ticket.status === 'ready' || ticket.paymentStatus === 'paid' || ticket.paymentStatus === 'pending_approval';
+  const deliveryDateStr = ticket.completedAt || (isDelivered ? ticket.updatedAt : undefined);
+
+  if (!deliveryDateStr || !isDelivered) {
+    return {
+      hasStarted: false,
+      startDateFormatted: 'Teslim Edilmedi',
+      endDateFormatted: 'Teslim Edilince Başlar',
+      remainingDays: 365,
+      totalDays: 365,
+      percentRemaining: 100,
+      isExpired: false,
+      statusBadge: {
+        text: '⏳ Teslimat Bekleniyor (Teslim edilince 1 Yıl Garanti Başlar)',
+        color: '#f59e0b',
+        bg: 'rgba(245, 158, 11, 0.15)',
+        border: 'rgba(245, 158, 11, 0.35)',
+      },
+    };
+  }
+
+  const startDate = new Date(deliveryDateStr);
+  const endDate = new Date(startDate);
+  endDate.setFullYear(endDate.getFullYear() + 1);
+
+  const now = new Date();
+  const diffMs = endDate.getTime() - now.getTime();
+  const remainingDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+  const isExpired = remainingDays <= 0;
+  const percentRemaining = isExpired ? 0 : Math.max(0, Math.min(100, Math.round((remainingDays / 365) * 100)));
+
+  return {
+    hasStarted: true,
+    startDate: deliveryDateStr,
+    endDate: endDate.toISOString(),
+    startDateFormatted: formatDateOnly(deliveryDateStr),
+    endDateFormatted: formatDateOnly(endDate.toISOString()),
+    remainingDays: Math.max(0, remainingDays),
+    totalDays: 365,
+    percentRemaining,
+    isExpired,
+    statusBadge: {
+      text: isExpired 
+        ? '⚠️ 1 Yıllık Garanti Süresi Doldu' 
+        : `🛡️ 1 Yıl Garanti Kapsamında (${remainingDays} Gün Kaldı)`,
+      color: isExpired ? '#ef4444' : '#10b981',
+      bg: isExpired ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)',
+      border: isExpired ? 'rgba(239, 68, 68, 0.35)' : 'rgba(16, 185, 129, 0.35)',
+    },
+  };
+};
+
+// Müşteriye WhatsApp 1 Yıl Garanti Belgesi Bildirim Linki
+export const generateWarrantyWhatsAppLink = (
+  phone: string,
+  ticket: ServiceTicket,
+  shopName: string,
+  shopPhone: string
+): string => {
+  const cleanPhone = phone.replace(/[^0-9]/g, '');
+  const targetPhone = cleanPhone.startsWith('90') ? cleanPhone : cleanPhone.startsWith('0') ? '9' + cleanPhone : '90' + cleanPhone;
+  const warranty = calculateServiceWarranty(ticket);
+  const partsList = (ticket.partsUsed || []).map(p => `• ${p.partName} (${p.quantity} ad.)`).join('\n');
+
+  const text = `Sayın *${ticket.customerName}*,\n\n*${shopName}* teknik servisimiz tarafından cihazınızın onarımı tamamlanmış ve teslim edilmiştir.\n\n` +
+    `📋 *Fiş No:* ${ticket.ticketNumber}\n` +
+    `🔧 *Cihaz:* ${ticket.brand} ${ticket.model}\n` +
+    `🛠️ *Yapılan İşlem:* ${ticket.technicianDiagnosis || 'Arıza onarımı ve testleri yapıldı.'}\n` +
+    (partsList ? `📦 *Değişen Orijinal Parçalar:*\n${partsList}\n` : '') +
+    `💰 *Toplam Tutar:* ${formatCurrency(ticket.totalAmount)}\n\n` +
+    `🛡️ *1 YIL RESMİ SERVİS GARANTİSİ:*\n` +
+    `• *Garanti Başlangıç (Teslim):* ${warranty.startDateFormatted}\n` +
+    `• *Garanti Bitiş:* ${warranty.endDateFormatted}\n` +
+    `• *Durum:* ${warranty.statusBadge.text}\n\n` +
+    `Cihazınızda yapılan tüm işçilik ve değişen yedek parçalar teslim tarihinden itibaren 1 yıl boyunca firmamızın garantisi altındadır.\n\n` +
+    `📞 *Destek & İletişim:* ${shopPhone}\n` +
+    `Bizi tercih ettiğiniz için teşekkür ederiz.`;
+
+  return `https://wa.me/${targetPhone}?text=${encodeURIComponent(text)}`;
+};
+
 export const isTicketCompleted = (t: ServiceTicket): boolean => {
   if (t.status === 'cancelled') return false;
   // Teslim edilmiş veya hazır olup, ödemesi ofis tarafından onaylanmış (paid) olanlar tamamen tamamlanmış sayılır

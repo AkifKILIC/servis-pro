@@ -28,13 +28,17 @@ import {
   ShieldCheck,
   Package,
   Monitor,
-  LogOut
+  LogOut,
+  History
 } from 'lucide-react';
 import { syncService } from '../services/syncService';
 import { ServiceTicket, SparePart, TicketPartItem, TicketStatus, PaymentStatus, PaymentMethod, Priority } from '../types';
 import { 
   formatCurrency, 
   formatDate, 
+  formatDateOnly,
+  calculateServiceWarranty,
+  generateWarrantyWhatsAppLink,
   deviceTypeConfig, 
   ticketStatusConfig,
   generateMapsLink,
@@ -1525,6 +1529,148 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
                   <Share2 size={16} />
                   <span>Müşteriye WhatsApp Fişi Gönder</span>
                 </a>
+              </div>
+
+              {/* 1 YIL GARANTİ SÜRECİ & TAKİBİ */}
+              {(() => {
+                const warranty = calculateServiceWarranty(inspectingTicket);
+                return (
+                  <div className="card" style={{ 
+                    padding: '14px', 
+                    background: warranty.hasStarted 
+                      ? 'linear-gradient(135deg, rgba(16, 185, 129, 0.1) 0%, rgba(5, 150, 105, 0.05) 100%)' 
+                      : 'rgba(255, 255, 255, 0.03)',
+                    borderColor: warranty.hasStarted ? 'rgba(16, 185, 129, 0.35)' : 'var(--border-subtle)',
+                    borderRadius: '14px'
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px', marginBottom: '10px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <ShieldCheck size={20} color={warranty.statusBadge.color} />
+                        <strong style={{ fontSize: '0.96rem', color: 'var(--text-main)' }}>
+                          1 Yıl Hizmet & Parça Garantisi
+                        </strong>
+                      </div>
+                      <span className="badge" style={{ 
+                        background: warranty.statusBadge.bg, 
+                        color: warranty.statusBadge.color, 
+                        border: `1px solid ${warranty.statusBadge.border}`,
+                        fontWeight: 800,
+                        fontSize: '0.78rem'
+                      }}>
+                        {warranty.statusBadge.text}
+                      </span>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '10px' }}>
+                      <div style={{ background: 'var(--bg-main)', padding: '8px 10px', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+                        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', display: 'block' }}>Garanti Başlangıç</span>
+                        <strong style={{ fontSize: '0.86rem', color: 'var(--text-main)' }}>{warranty.startDateFormatted}</strong>
+                      </div>
+                      <div style={{ background: 'var(--bg-main)', padding: '8px 10px', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+                        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', display: 'block' }}>Garanti Bitiş</span>
+                        <strong style={{ fontSize: '0.86rem', color: warranty.isExpired ? '#ef4444' : '#10b981' }}>{warranty.endDateFormatted}</strong>
+                      </div>
+                    </div>
+
+                    {warranty.hasStarted && (
+                      <div style={{ marginBottom: '8px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: '3px' }}>
+                          <span>Kalan Gün: {warranty.remainingDays} gün (%{warranty.percentRemaining})</span>
+                          <span>365 Gün</span>
+                        </div>
+                        <div style={{ height: '6px', background: 'rgba(255,255,255,0.06)', borderRadius: '10px', overflow: 'hidden' }}>
+                          <div style={{ 
+                            height: '100%', 
+                            width: `${warranty.percentRemaining}%`, 
+                            background: warranty.isExpired ? '#ef4444' : 'linear-gradient(90deg, #10b981, #059669)',
+                            borderRadius: '10px'
+                          }} />
+                        </div>
+                      </div>
+                    )}
+
+                    <div style={{ fontSize: '0.76rem', color: 'var(--text-dim)', marginTop: '4px' }}>
+                      🛡️ Teslim tarihinden itibaren 1 yıl süreyle işçilik ve değişen yedek parçalar firma garantisindedir.
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* YAPILAN İŞLEMLER VE TARİHÇESİ (ZAMAN ÇİZELGESİ) */}
+              <div className="card" style={{ padding: '14px', borderRadius: '14px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+                  <History size={18} color="var(--primary)" />
+                  <div>
+                    <h4 style={{ fontSize: '0.94rem', fontWeight: 800, margin: 0 }}>
+                      Yapılan İşlemler ve Tarihçesi
+                    </h4>
+                    <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                      Kayıt açılışından teslimata kadar işlem adımları
+                    </span>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', paddingLeft: '8px', borderLeft: '2px solid var(--border-subtle)', marginLeft: '8px' }}>
+                  {/* Adım 1: Kayıt */}
+                  <div style={{ position: 'relative', paddingLeft: '12px' }}>
+                    <div style={{ position: 'absolute', left: '-19px', top: '3px', width: '10px', height: '10px', borderRadius: '50%', background: '#3b82f6', border: '2px solid var(--bg-card)' }} />
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <strong style={{ fontSize: '0.84rem' }}>1. Servis Kaydı Alındı</strong>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{formatDate(inspectingTicket.createdAt)}</span>
+                    </div>
+                    <div style={{ fontSize: '0.76rem', color: '#f59e0b', marginTop: '2px' }}>
+                      Şikayet: "{inspectingTicket.reportedFault}"
+                    </div>
+                  </div>
+
+                  {/* Adım 2: İnceleme & Teşhis */}
+                  <div style={{ position: 'relative', paddingLeft: '12px' }}>
+                    <div style={{ position: 'absolute', left: '-19px', top: '3px', width: '10px', height: '10px', borderRadius: '50%', background: '#f59e0b', border: '2px solid var(--bg-card)' }} />
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <strong style={{ fontSize: '0.84rem' }}>2. Saha Teşhisi & Onarım</strong>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{formatDate(inspectingTicket.updatedAt)}</span>
+                    </div>
+                    <div style={{ fontSize: '0.78rem', color: 'var(--text-dim)', marginTop: '2px' }}>
+                      {inspectDiagnosis.trim() || inspectingTicket.technicianDiagnosis || 'Arıza tespiti yapıldı.'}
+                    </div>
+                  </div>
+
+                  {/* Adım 3: Parçalar */}
+                  <div style={{ position: 'relative', paddingLeft: '12px' }}>
+                    <div style={{ position: 'absolute', left: '-19px', top: '3px', width: '10px', height: '10px', borderRadius: '50%', background: inspectParts.length > 0 ? '#8b5cf6' : '#64748b', border: '2px solid var(--bg-card)' }} />
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <strong style={{ fontSize: '0.84rem' }}>3. Yedek Parçalar</strong>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{inspectParts.length > 0 ? `${inspectParts.length} Parça` : 'Parçasız'}</span>
+                    </div>
+                    {inspectParts.length > 0 ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', marginTop: '4px' }}>
+                        {inspectParts.map((p, idx) => (
+                          <div key={idx} style={{ fontSize: '0.74rem', color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between' }}>
+                            <span>• {p.partName} ({p.quantity} Adet)</span>
+                            <strong style={{ color: 'var(--text-main)' }}>{formatCurrency(p.totalPrice)}</strong>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>Parça değişimi yapılmadı.</div>
+                    )}
+                  </div>
+
+                  {/* Adım 4: Teslim & Garanti */}
+                  <div style={{ position: 'relative', paddingLeft: '12px' }}>
+                    <div style={{ position: 'absolute', left: '-19px', top: '3px', width: '10px', height: '10px', borderRadius: '50%', background: '#10b981', border: '2px solid var(--bg-card)' }} />
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <strong style={{ fontSize: '0.84rem', color: '#10b981' }}>4. Teslimat, Tahsilat & Garanti</strong>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{formatDate(inspectingTicket.completedAt || inspectingTicket.updatedAt)}</span>
+                    </div>
+                    <div style={{ fontSize: '0.76rem', color: 'var(--text-dim)', marginTop: '2px' }}>
+                      Toplam: <strong>{formatCurrency(inspectingTicket.totalAmount)}</strong> ({inspectPaymentMethod === 'cash' ? 'Nakit' : inspectPaymentMethod === 'credit_card' ? 'Kredi Kartı' : 'Havale'})
+                    </div>
+                    <div style={{ fontSize: '0.74rem', color: '#10b981', fontWeight: 700, marginTop: '2px' }}>
+                      🛡️ 1 Yıllık garanti süreci teslimatla başlatıldı.
+                    </div>
+                  </div>
+                </div>
               </div>
 
               {/* 7. ALT AKSİYON BUTONLARI (TEK SIRA / DİKEY) */}
