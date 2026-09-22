@@ -185,6 +185,7 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
   const [repairStatus, setRepairStatus] = useState<'in_repair' | 'waiting_parts' | 'ready'>('in_repair');
   const [isJobAcceptedPayCollected, setIsJobAcceptedPayCollected] = useState(false);
   const [jobAcceptedPayMethod, setJobAcceptedPayMethod] = useState<PaymentMethod>('cash');
+  const [jobAcceptedCollectedAmount, setJobAcceptedCollectedAmount] = useState('600');
 
   // Hızlı Tahsilat Modalı (Saha Ustası Tek Tıkla Ücret Tahsil Eder ve Ofis Onayına Gönderir)
   const [isQuickPayModalOpen, setIsQuickPayModalOpen] = useState(false);
@@ -251,7 +252,8 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
     setInspectLaborCost(ticket.laborCost || 0);
     setInspectTransportCost(ticket.transportCost || 0);
     setInspectDiscount(ticket.discount || 0);
-    setInspectPaymentStatus(ticket.paymentStatus || 'unpaid');
+    // Kullanıcı talebi: Ayrıntıları İncele modalında ödeme durumu varsayılan (default) olarak 'pending_approval' (Tahsil Edildi - Ofis Onayı Bekliyor) gelsin
+    setInspectPaymentStatus(ticket.paymentStatus === 'paid' ? 'paid' : 'pending_approval');
     setInspectPaymentMethod(ticket.paymentMethod || 'cash');
     setInspectParts(ticket.partsUsed ? [...ticket.partsUsed] : []);
     setIsAddingPart(false);
@@ -414,7 +416,9 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
     if (!selectedTicket) return;
     const partCost = parseFloat(repairPartPrice) || 0;
     const laborCost = parseFloat(repairLaborPrice) || 0;
-    const total = partCost + laborCost;
+    const calcTotal = partCost + laborCost;
+    const isCollected = isJobAcceptedPayCollected || repairStatus === 'ready';
+    const finalAmount = parseFloat(jobAcceptedCollectedAmount) || calcTotal;
 
     let updatedParts = selectedTicket.partsUsed || [];
     if (repairPartName.trim()) {
@@ -430,22 +434,22 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
       ];
     }
 
-    const finalStatus = isJobAcceptedPayCollected 
-      ? (repairStatus === 'waiting_parts' ? 'waiting_parts' : 'delivered')
+    const finalStatus: TicketStatus = isCollected 
+      ? 'delivered' 
       : repairStatus;
 
     onUpdateTicket(selectedTicket.id, {
       ticketNumber: selectedTicket.ticketNumber,
       customerName: selectedTicket.customerName,
       status: finalStatus,
-      technicianDiagnosis: repairDiagnosis.trim() || 'Arıza tespit edildi, onarıma başlandı.',
+      technicianDiagnosis: repairDiagnosis.trim() || (isCollected ? 'Onarım tamamlandı, cihaz test edildi ve ücret tahsil edildi.' : 'Arıza tespit edildi, onarıma başlandı.'),
       partsUsed: updatedParts,
       laborCost: laborCost,
-      totalAmount: total,
-      paymentStatus: isJobAcceptedPayCollected ? 'pending_approval' : selectedTicket.paymentStatus,
-      paidAmount: isJobAcceptedPayCollected ? total : selectedTicket.paidAmount,
-      paymentMethod: isJobAcceptedPayCollected ? jobAcceptedPayMethod : selectedTicket.paymentMethod,
-      completedAt: isJobAcceptedPayCollected ? new Date().toISOString() : selectedTicket.completedAt,
+      totalAmount: (finalAmount > 0 ? finalAmount : calcTotal),
+      paymentStatus: isCollected ? 'pending_approval' : selectedTicket.paymentStatus,
+      paidAmount: isCollected ? finalAmount : selectedTicket.paidAmount,
+      paymentMethod: isCollected ? jobAcceptedPayMethod : selectedTicket.paymentMethod,
+      completedAt: isCollected ? new Date().toISOString() : selectedTicket.completedAt,
       updatedAt: new Date().toISOString(),
     });
 
@@ -1090,9 +1094,14 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
                       onClick={() => {
                         setSelectedTicket(ticket);
                         setRepairDiagnosis(ticket.technicianDiagnosis || '');
+                        setRepairPartName('');
                         setRepairPartPrice('0');
-                        setRepairLaborPrice(ticket.laborCost ? ticket.laborCost.toString() : '600');
+                        const defaultLabor = ticket.laborCost ? ticket.laborCost.toString() : '600';
+                        setRepairLaborPrice(defaultLabor);
+                        setRepairStatus('in_repair');
                         setIsJobAcceptedPayCollected(false);
+                        setJobAcceptedPayMethod(ticket.paymentMethod || 'cash');
+                        setJobAcceptedCollectedAmount(ticket.totalAmount > 0 ? ticket.totalAmount.toString() : defaultLabor);
                         setIsJobAcceptedModalOpen(true);
                       }}
                     >
@@ -1713,7 +1722,12 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
                   className="form-control" 
                   style={{ height: '44px', fontSize: '0.95rem', borderRadius: '10px' }}
                   value={repairPartPrice}
-                  onChange={e => setRepairPartPrice(e.target.value)}
+                  onChange={e => {
+                    const p = e.target.value;
+                    setRepairPartPrice(p);
+                    const newTotal = (parseFloat(p) || 0) + (parseFloat(repairLaborPrice) || 0);
+                    setJobAcceptedCollectedAmount(newTotal.toString());
+                  }}
                 />
               </div>
 
@@ -1724,7 +1738,12 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
                   className="form-control" 
                   style={{ height: '44px', fontSize: '0.95rem', borderRadius: '10px' }}
                   value={repairLaborPrice}
-                  onChange={e => setRepairLaborPrice(e.target.value)}
+                  onChange={e => {
+                    const l = e.target.value;
+                    setRepairLaborPrice(l);
+                    const newTotal = (parseFloat(repairPartPrice) || 0) + (parseFloat(l) || 0);
+                    setJobAcceptedCollectedAmount(newTotal.toString());
+                  }}
                 />
               </div>
 
@@ -1734,65 +1753,145 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
                   className="form-control"
                   style={{ height: '44px', fontSize: '0.92rem', borderRadius: '10px' }}
                   value={repairStatus}
-                  onChange={e => setRepairStatus(e.target.value as any)}
+                  onChange={e => {
+                    const val = e.target.value as any;
+                    setRepairStatus(val);
+                    if (val === 'ready') {
+                      setIsJobAcceptedPayCollected(true);
+                      const currentSum = (parseFloat(repairPartPrice) || 0) + (parseFloat(repairLaborPrice) || 0);
+                      if (currentSum > 0) {
+                        setJobAcceptedCollectedAmount(currentSum.toString());
+                      }
+                    }
+                  }}
                 >
                   <option value="in_repair">🔧 Onarımda / İnceleniyor</option>
                   <option value="waiting_parts">📦 Parça Bekleniyor (Toptancıdan)</option>
-                  <option value="ready">✅ Onarım Bitti / Testte Hazır</option>
+                  <option value="ready">✅ Onarım Bitti / Testte Hazır (Tahsilat Yap)</option>
                 </select>
               </div>
 
               {/* Tutar Özeti */}
               <div style={{ background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.25)', borderRadius: '10px', padding: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: '0.88rem', color: 'var(--primary)', fontWeight: 600 }}>Toplam Tutar:</span>
+                <span style={{ fontSize: '0.88rem', color: 'var(--primary)', fontWeight: 600 }}>Toplam Maliyet / Fiyat:</span>
                 <strong style={{ fontSize: '1.25rem', color: 'var(--text-main)' }}>
                   {formatCurrency((parseFloat(repairPartPrice) || 0) + (parseFloat(repairLaborPrice) || 0))}
                 </strong>
               </div>
 
-              {/* Saha Tahsilat Onayı Seçeneği */}
-              <div style={{ background: 'rgba(245, 158, 11, 0.12)', border: '1px solid rgba(245, 158, 11, 0.35)', borderRadius: '12px', padding: '12px' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', margin: 0, fontWeight: 700, color: '#f59e0b', fontSize: '0.9rem' }}>
-                  <input 
-                    type="checkbox" 
-                    checked={isJobAcceptedPayCollected}
-                    onChange={e => setIsJobAcceptedPayCollected(e.target.checked)}
-                    style={{ width: '18px', height: '18px', accentColor: '#f59e0b' }}
-                  />
-                  <span>💰 Ücret Müşteriden Alındı (Ofis Onayına Gönder)</span>
-                </label>
-
-                {isJobAcceptedPayCollected && (
-                  <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px dashed rgba(245, 158, 11, 0.3)' }}>
-                    <label className="form-label" style={{ fontSize: '0.82rem', fontWeight: 600 }}>Ödeme Yöntemi:</label>
-                    <select 
-                      className="form-control"
-                      style={{ height: '40px', fontSize: '0.88rem' }}
-                      value={jobAcceptedPayMethod}
-                      onChange={e => setJobAcceptedPayMethod(e.target.value as any)}
-                    >
-                      <option value="cash">💵 Nakit</option>
-                      <option value="credit_card">💳 Kredi Kartı / POS</option>
-                      <option value="bank_transfer">🏦 IBAN / Havale</option>
-                    </select>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block', marginTop: '4px' }}>
-                      ℹ️ Tahsilatı aldığınızda iş listenizden düşer ve ofis ekranında onay bekleyenlere iletilir.
-                    </span>
+              {/* Saha Tahsilat Onayı Seçeneği - Onarım bittiye alındığında veya işaretlendiğinde doğrudan açılır */}
+              {(repairStatus === 'ready' || isJobAcceptedPayCollected) ? (
+                <div style={{ 
+                  background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.16) 0%, rgba(5, 150, 105, 0.08) 100%)', 
+                  border: '1px solid rgba(16, 185, 129, 0.45)', 
+                  borderRadius: '14px', 
+                  padding: '14px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '10px'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <strong style={{ fontSize: '0.95rem', color: '#10b981', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <DollarSign size={18} />
+                      <span>Hemen Tahsil Et & İşi Bitir</span>
+                    </strong>
+                    {repairStatus !== 'ready' && (
+                      <button 
+                        type="button" 
+                        onClick={() => setIsJobAcceptedPayCollected(false)} 
+                        style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '0.78rem', cursor: 'pointer', textDecoration: 'underline' }}
+                      >
+                        Tahsilatı İptal Et
+                      </button>
+                    )}
                   </div>
-                )}
-              </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                    <div>
+                      <label className="form-label" style={{ fontSize: '0.84rem', fontWeight: 700, color: 'var(--text-main)' }}>
+                        Tahsil Edilen Tutar (TL) *
+                      </label>
+                      <input 
+                        type="number" 
+                        className="form-control"
+                        style={{ height: '44px', fontSize: '1.2rem', fontWeight: 800, color: '#10b981', borderRadius: '10px' }}
+                        value={jobAcceptedCollectedAmount}
+                        onChange={e => setJobAcceptedCollectedAmount(e.target.value)}
+                        placeholder="0"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="form-label" style={{ fontSize: '0.84rem', fontWeight: 700, color: 'var(--text-main)' }}>
+                        Ödeme Yöntemi
+                      </label>
+                      <select 
+                        className="form-control"
+                        style={{ height: '44px', fontSize: '0.9rem', borderRadius: '10px' }}
+                        value={jobAcceptedPayMethod}
+                        onChange={e => setJobAcceptedPayMethod(e.target.value as any)}
+                      >
+                        <option value="cash">💵 Nakit</option>
+                        <option value="credit_card">💳 Kredi Kartı / POS</option>
+                        <option value="bank_transfer">🏦 IBAN / Havale</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <span style={{ fontSize: '0.78rem', color: '#10b981', fontWeight: 600 }}>
+                    ℹ️ Tahsilatı aldığınızda fiş ustanın ekranından düşer, ofis onayına iletilir.
+                  </span>
+                </div>
+              ) : (
+                <div style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid var(--border-subtle)', borderRadius: '12px', padding: '10px 12px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', margin: 0, fontWeight: 600, color: 'var(--text-muted)', fontSize: '0.86rem' }}>
+                    <input 
+                      type="checkbox" 
+                      checked={isJobAcceptedPayCollected}
+                      onChange={e => {
+                        setIsJobAcceptedPayCollected(e.target.checked);
+                        const currentSum = (parseFloat(repairPartPrice) || 0) + (parseFloat(repairLaborPrice) || 0);
+                        if (currentSum > 0) setJobAcceptedCollectedAmount(currentSum.toString());
+                      }}
+                      style={{ width: '18px', height: '18px', accentColor: '#10b981' }}
+                    />
+                    <span>💰 Ücret Müşteriden Şimdi Alındı (Ofis Onayına Gönder)</span>
+                  </label>
+                </div>
+              )}
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '16px', paddingTop: '12px', borderTop: '1px solid var(--border-subtle)' }}>
-              <button 
-                type="button" 
-                className="btn btn-primary" 
-                style={{ width: '100%', height: '46px', fontSize: '0.95rem', fontWeight: 800, justifyContent: 'center', borderRadius: '10px' }}
-                onClick={handleConfirmJobAccepted}
-              >
-                <Check size={18} />
-                <span>Kaydet & Ofise İlet</span>
-              </button>
+              {(repairStatus === 'ready' || isJobAcceptedPayCollected) ? (
+                <button 
+                  type="button" 
+                  className="btn btn-success" 
+                  style={{ 
+                    width: '100%', 
+                    height: '48px', 
+                    fontSize: '0.96rem', 
+                    fontWeight: 900, 
+                    justifyContent: 'center', 
+                    borderRadius: '12px',
+                    background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                    boxShadow: '0 4px 14px rgba(16, 185, 129, 0.35)'
+                  }}
+                  onClick={handleConfirmJobAccepted}
+                >
+                  <CheckCircle2 size={18} />
+                  <span>Tahsilatı Kaydet & İşi Bitir (Ofis Onayına Gönder)</span>
+                </button>
+              ) : (
+                <button 
+                  type="button" 
+                  className="btn btn-primary" 
+                  style={{ width: '100%', height: '46px', fontSize: '0.95rem', fontWeight: 800, justifyContent: 'center', borderRadius: '10px' }}
+                  onClick={handleConfirmJobAccepted}
+                >
+                  <Check size={18} />
+                  <span>Kaydet & Ofise İlet ({repairStatus === 'waiting_parts' ? 'Parça Bekleniyor' : 'Onarımda'})</span>
+                </button>
+              )}
               <button 
                 type="button" 
                 className="btn btn-secondary" 
