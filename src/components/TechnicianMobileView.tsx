@@ -31,7 +31,7 @@ import {
   LogOut
 } from 'lucide-react';
 import { syncService } from '../services/syncService';
-import { ServiceTicket, SparePart, TicketPartItem, TicketStatus, PaymentStatus, PaymentMethod } from '../types';
+import { ServiceTicket, SparePart, TicketPartItem, TicketStatus, PaymentStatus, PaymentMethod, Priority } from '../types';
 import { 
   formatCurrency, 
   formatDate, 
@@ -187,11 +187,39 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
   // Yerel Saat Dilimine Göre Bugünün Tarihi (YYYY-MM-DD)
   const todayStr = getLocalDateString();
 
-  // 1. Bugünün ve Dünden Devreden Açık Servisleri (Bitmeyen, parça bekleyen veya ödeme bekleyen tüm işler)
-  const todayTickets = tickets.filter(t => isTodayTicket(t, todayStr));
+  // Saha Ustası Özel Sıralama Fonksiyonu:
+  // "onarımda" (in_repair) veya "parça bekleyen" (waiting_parts) kayıtlar HER ZAMAN yeni açılan kayıtların ALTINDA yer alır
+  const sortTicketsForTechnician = (list: ServiceTicket[]): ServiceTicket[] => {
+    return [...list].sort((a, b) => {
+      const getStatusRank = (status: TicketStatus) => {
+        if (status === 'waiting_parts') return 2; // En altta
+        if (status === 'in_repair') return 1;     // Onarımda olan parça bekleyenin hemen üstünde, yeni işlerin altında
+        return 0;                                 // Yeni açılan işler her zaman en üstte
+      };
 
-  // 2. İleri Tarihli Randevular: Randevusu gelecekte olan açık işler (o gün gelene kadar burada tutulur)
-  const upcomingTickets = tickets.filter(t => isUpcomingTicket(t, todayStr));
+      const rankA = getStatusRank(a.status);
+      const rankB = getStatusRank(b.status);
+      if (rankA !== rankB) {
+        return rankA - rankB; // Küçük rank (yeni işler) önce gelir
+      }
+
+      // Aynı grup içindeyse: Acil olanlar öncelikli
+      const priorityScore = (p: Priority) => (p === 'urgent' ? 2 : p === 'normal' ? 1 : 0);
+      const prioDiff = priorityScore(b.priority) - priorityScore(a.priority);
+      if (prioDiff !== 0) return prioDiff;
+
+      // Son olarak en yeni açılan kayıt en üstte
+      const timeA = new Date(a.createdAt || 0).getTime();
+      const timeB = new Date(b.createdAt || 0).getTime();
+      return timeB - timeA;
+    });
+  };
+
+  // 1. Bugünün ve Dünden Devreden Açık Servisleri (Yeni açılanlar üstte, onarımda/parça bekleyenler altta)
+  const todayTickets = sortTicketsForTechnician(tickets.filter(t => isTodayTicket(t, todayStr)));
+
+  // 2. İleri Tarihli Randevular
+  const upcomingTickets = sortTicketsForTechnician(tickets.filter(t => isUpcomingTicket(t, todayStr)));
 
   // 3. Tamamlanan & Tahsil Edilenler: Hem teslim edilmiş hem de tahsilatı tamamlanmış arşiv kayıtları
   const completedTickets = tickets.filter(t => isTicketCompleted(t));
