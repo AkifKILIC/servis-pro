@@ -317,6 +317,13 @@ class SyncService {
     } catch (e) {}
   }
 
+  // Yeni oluşturulan fişi syncService hafızasına kaydet (Silinme ve mükerrer bildirim koruması)
+  public registerTicket(ticket: ServiceTicket) {
+    if (!ticket || !ticket.id) return;
+    this.knownTicketIds.add(ticket.id);
+    this.knownTicketMap.set(ticket.id, `${ticket.status}_${ticket.updatedAt || ''}_${ticket.paidAmount}`);
+  }
+
   // iPhone ve Ofis PC için Yüksek Hızlı Akıllı Senkronizasyon (3.5 saniyede bir taranır)
   private startSmartPolling() {
     if (this.pollingInterval) return;
@@ -331,6 +338,31 @@ class SyncService {
         if (data && data.tickets && Array.isArray(data.tickets)) {
           const currentIds = new Set(data.tickets.map((t: ServiceTicket) => t.id));
 
+          // Yerel depodaki fişleri kontrol et:
+          // Son 5 dakika içinde eklenmiş/güncellenmiş veya kuyrukta olan yerel fişler
+          // MySQL'den henüz gelmemişse SİLİNMİŞ DEĞİLDİR! Onları koru ve listeye kat.
+          const localTickets = storage.getTickets();
+          const now = Date.now();
+          const pendingOrRecentLocal = localTickets.filter(lt => {
+            if (currentIds.has(lt.id)) return false;
+            const createdTime = lt.createdAt ? new Date(lt.createdAt).getTime() : now;
+            const updatedTime = lt.updatedAt ? new Date(lt.updatedAt).getTime() : now;
+            const isRecent = (now - createdTime < 300000) || (now - updatedTime < 300000);
+            const inQueue = this.offlineQueue.some(m => m.data?.id === lt.id);
+            return isRecent || inQueue;
+          });
+
+          if (pendingOrRecentLocal.length > 0) {
+            data.tickets = [...pendingOrRecentLocal, ...data.tickets];
+            pendingOrRecentLocal.forEach(lt => {
+              currentIds.add(lt.id);
+              this.knownTicketIds.add(lt.id);
+              this.knownTicketMap.set(lt.id, `${lt.status}_${lt.updatedAt || ''}_${lt.paidAmount}`);
+              // Eksikse MySQL'e arka planda yeniden yaz
+              this.saveTicketToSql(lt);
+            });
+          }
+
           // İlk yükleme
           if (this.knownTicketIds.size === 0) {
             data.tickets.forEach((t: ServiceTicket) => {
@@ -340,7 +372,7 @@ class SyncService {
             return;
           }
 
-          // Silinen Fiş Kontrolü: Eğer önceden bildiğimiz fiş artık MySQL'de yoksa, diğer cihaz silmiştir!
+          // Silinen Fiş Kontrolü: Eğer önceden bildiğimiz fiş artık MySQL'de yoksa ve yakın zamanda açılmamışsa
           let hasDeleted = false;
           for (const knownId of Array.from(this.knownTicketIds)) {
             if (!currentIds.has(knownId)) {

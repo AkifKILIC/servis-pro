@@ -153,6 +153,38 @@ function ensureTablesExist($pdo) {
 
 ensureTablesExist($pdo);
 
+// Benzersiz ve Sıralı Fiş Numarası Garantisi
+function getNextUniqueTicketNumber($pdo, $desiredNumber, $ticketId) {
+    if (!empty($desiredNumber)) {
+        $stmt = $pdo->prepare("SELECT id FROM tickets WHERE ticketNumber = ? AND id != ?");
+        $stmt->execute([$desiredNumber, $ticketId]);
+        if (!$stmt->fetch()) {
+            return $desiredNumber;
+        }
+    }
+
+    $year = date('Y');
+    $prefix = "SRV-{$year}-";
+    $stmt = $pdo->prepare("SELECT ticketNumber FROM tickets WHERE ticketNumber LIKE ?");
+    $stmt->execute([$prefix . '%']);
+    $maxNum = 0;
+    while ($row = $stmt->fetch()) {
+        $num = intval(substr($row['ticketNumber'], strlen($prefix)));
+        if ($num > $maxNum) $maxNum = $num;
+    }
+
+    $cStmt = $pdo->prepare("SELECT description FROM cash_transactions WHERE description LIKE ?");
+    $cStmt->execute(["%{$prefix}%"]);
+    while ($cRow = $cStmt->fetch()) {
+        if (preg_match('/SRV-\d{4}-(\d+)/', $cRow['description'], $matches)) {
+            $cNum = intval($matches[1]);
+            if ($cNum > $maxNum) $maxNum = $cNum;
+        }
+    }
+
+    return $prefix . str_pad($maxNum + 1, 4, '0', STR_PAD_LEFT);
+}
+
 // İstek Verisini Al
 $action = $_GET['action'] ?? '';
 $rawInput = file_get_contents('php://input');
@@ -255,9 +287,16 @@ try {
 
             if (!empty($body['tickets']) && is_array($body['tickets'])) {
                 $stmt = $pdo->prepare("REPLACE INTO tickets (id, ticketNumber, customerId, customerName, customerPhone, customerAddress, deviceType, brand, model, serialNumber, warrantyStatus, reportedFault, technicianDiagnosis, technicianName, status, priority, scheduledDate, scheduledTimeSlot, partsUsed, laborCost, transportCost, discount, totalAmount, paymentStatus, paymentMethod, paidAmount, notes, createdAt, updatedAt, completedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+                $assignedNumbers = [];
                 foreach ($body['tickets'] as $t) {
+                    $tNumber = $t['ticketNumber'] ?? '';
+                    if (empty($tNumber) || in_array($tNumber, $assignedNumbers)) {
+                        $tNumber = getNextUniqueTicketNumber($pdo, '', $t['id']);
+                    }
+                    $assignedNumbers[] = $tNumber;
+
                     $stmt->execute([
-                        $t['id'], $t['ticketNumber'], $t['customerId'], $t['customerName'], $t['customerPhone'],
+                        $t['id'], $tNumber, $t['customerId'], $t['customerName'], $t['customerPhone'],
                         $t['customerAddress'], $t['deviceType'], $t['brand'], $t['model'], $t['serialNumber'] ?? null,
                         $t['warrantyStatus'], $t['reportedFault'], $t['technicianDiagnosis'] ?? null, $t['technicianName'] ?? null,
                         $t['status'], $t['priority'], $t['scheduledDate'] ?? null, $t['scheduledTimeSlot'] ?? null,
@@ -329,9 +368,12 @@ try {
         // -------------------------------------------------------------
         case 'ticket_save':
             $t = $body;
-            if (empty($t['id']) || empty($t['ticketNumber'])) {
-                throw new Exception('Eksik fiş bilgisi');
+            if (empty($t['id'])) {
+                throw new Exception('Eksik fiş ID bilgisi');
             }
+
+            // Benzersiz ve sıralı numara güvencesi (Var olan başka fişin ezilmesini engeller)
+            $t['ticketNumber'] = getNextUniqueTicketNumber($pdo, $t['ticketNumber'] ?? '', $t['id']);
 
             $stmt = $pdo->prepare("REPLACE INTO tickets (id, ticketNumber, customerId, customerName, customerPhone, customerAddress, deviceType, brand, model, serialNumber, warrantyStatus, reportedFault, technicianDiagnosis, technicianName, status, priority, scheduledDate, scheduledTimeSlot, partsUsed, laborCost, transportCost, discount, totalAmount, paymentStatus, paymentMethod, paidAmount, notes, createdAt, updatedAt, completedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
             $stmt->execute([

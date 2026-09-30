@@ -235,8 +235,19 @@ export const App: React.FC = () => {
           storage.saveSettings(event.data.settings);
         }
         if (event.data?.tickets && Array.isArray(event.data.tickets)) {
-          setTickets(event.data.tickets);
-          storage.saveTickets(event.data.tickets);
+          const localTickets = storage.getTickets();
+          const incomingIds = new Set(event.data.tickets.map((t: ServiceTicket) => t.id));
+          const now = Date.now();
+          // Yerelde son 5 dakikada oluşturulmuş/düzenlenmiş henüz sunucuda görünmeyen fişleri koru
+          const unsyncedLocal = localTickets.filter(lt => {
+            if (incomingIds.has(lt.id)) return false;
+            const cTime = lt.createdAt ? new Date(lt.createdAt).getTime() : now;
+            const uTime = lt.updatedAt ? new Date(lt.updatedAt).getTime() : now;
+            return (now - cTime < 300000) || (now - uTime < 300000);
+          });
+          const mergedTickets = [...unsyncedLocal, ...event.data.tickets];
+          setTickets(mergedTickets);
+          storage.saveTickets(mergedTickets);
         }
         if (event.data?.customers && Array.isArray(event.data.customers)) {
           setCustomers(event.data.customers);
@@ -333,6 +344,8 @@ export const App: React.FC = () => {
       const newCusts = storage.getCustomers();
       setCustomers(newCusts);
       ticketData.customerId = createdCust.id;
+      // Yeni müşteriyi doğrudan veritabanına aktar
+      syncService.saveCustomerToSql(createdCust);
     }
 
     let savedTicket;
@@ -349,7 +362,14 @@ export const App: React.FC = () => {
     setIsTicketModalOpen(false);
     setTicketToEdit(null);
 
-    // Canlı sunucuya (MySQL) aktar
+    if (savedTicket) {
+      // 1. syncService hafızasına fişi kaydet (Böylece polling sırasında silinmiş sayılmaz)
+      syncService.registerTicket(savedTicket);
+      // 2. MySQL veritabanına tekil olarak güvenle yaz
+      syncService.saveTicketToSql(savedTicket);
+    }
+
+    // 3. Canlı sunucuya (MySQL) genel liste aktarımı yap
     syncService.pushFullSync({
       tickets: updatedTickets,
       customers: storage.getCustomers(),
@@ -357,10 +377,6 @@ export const App: React.FC = () => {
       cash: storage.getCashTransactions(),
       settings: storage.getSettings(),
     });
-
-    if (savedTicket) {
-      syncService.saveTicketToSql(savedTicket);
-    }
 
     // USTANIN TELEFONUNA ANINDA SESLİ BİLDİRİM & ZİL FIRLAT ("Kayıt oluşturulduğu gibi ustaya atsın")
     if (savedTicket) {

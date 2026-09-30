@@ -606,11 +606,46 @@ class StorageService {
 
   generateTicketNumber(): string {
     const tickets = this.getTickets();
+    const cash = this.getCashTransactions();
     const currentYear = new Date().getFullYear();
     const yearPrefix = `SRV-${currentYear}-`;
-    const sameYearTickets = tickets.filter(t => t.ticketNumber.startsWith(yearPrefix));
-    const nextSeq = sameYearTickets.length + 1;
-    return `${yearPrefix}${String(nextSeq).padStart(4, '0')}`;
+    let maxSeq = 0;
+
+    // 1. Mevcut tüm servis fişlerindeki en yüksek sıra numarasını bul
+    tickets.forEach(t => {
+      if (t.ticketNumber && t.ticketNumber.startsWith(yearPrefix)) {
+        const numPart = t.ticketNumber.replace(yearPrefix, '');
+        const num = parseInt(numPart, 10);
+        if (!isNaN(num) && num > maxSeq) {
+          maxSeq = num;
+        }
+      }
+    });
+
+    // 2. Kasa işlemlerinde referans verilmiş geçmiş fiş numaralarını da kontrol et
+    cash.forEach(c => {
+      if (c.description) {
+        const match = c.description.match(new RegExp(`SRV-${currentYear}-(\\d+)`));
+        if (match && match[1]) {
+          const num = parseInt(match[1], 10);
+          if (!isNaN(num) && num > maxSeq) {
+            maxSeq = num;
+          }
+        }
+      }
+    });
+
+    // 3. Sıradaki benzersiz numarayı üret
+    let nextSeq = Math.max(maxSeq + 1, 1);
+    let candidate = `${yearPrefix}${String(nextSeq).padStart(4, '0')}`;
+
+    // 4. Çifte güvenlik: Var olan hiçbir fiş numarasıyla çakışmadığından emin ol
+    while (tickets.some(t => t.ticketNumber === candidate)) {
+      nextSeq++;
+      candidate = `${yearPrefix}${String(nextSeq).padStart(4, '0')}`;
+    }
+
+    return candidate;
   }
 
   addTicket(ticketData: Omit<ServiceTicket, 'id' | 'ticketNumber' | 'createdAt' | 'updatedAt'>): ServiceTicket {
