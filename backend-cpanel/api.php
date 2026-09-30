@@ -193,6 +193,36 @@ $body = json_decode($rawInput, true) ?: [];
 try {
     switch ($action) {
         // -------------------------------------------------------------
+        // 0. CANLI BULUT BİLDİRİM & ANLIK USTA KÖPRÜSÜ (Vercel Yerine Doğrudan cPanel)
+        // -------------------------------------------------------------
+        case 'cloud_sync':
+            $topic = 'servispro_akifkilic_sync';
+            if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+                $since = $_GET['since'] ?? '30s';
+                $url = "https://ntfy.sh/{$topic}/json?poll=1&since=" . urlencode($since);
+                $ctx = stream_context_create(['http' => ['timeout' => 6]]);
+                $content = @file_get_contents($url, false, $ctx);
+                header('Content-Type: text/plain; charset=utf-8');
+                echo ($content !== false) ? $content : '';
+                exit();
+            } else if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+                $bodyData = array_merge(['topic' => $topic], $body);
+                $options = [
+                    'http' => [
+                        'header'  => "Content-type: application/json\r\n",
+                        'method'  => 'POST',
+                        'content' => json_encode($bodyData, JSON_UNESCAPED_UNICODE),
+                        'timeout' => 6
+                    ]
+                ];
+                $context  = stream_context_create($options);
+                @file_get_contents('https://ntfy.sh', false, $context);
+                echo json_encode(['success' => true]);
+                exit();
+            }
+            break;
+
+        // -------------------------------------------------------------
         // 1. TÜM VERİLERİ GETİR (Telefon veya PC açılışında tek sorguda çeker)
         // -------------------------------------------------------------
         case 'data':

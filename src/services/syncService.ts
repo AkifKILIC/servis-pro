@@ -3,10 +3,6 @@ import { storage } from './storage';
 
 type SyncCallback = (event: { type: string; data: any }) => void;
 
-// Vercel üzerinde bağımsız çalışan global yüksek hızlı bulut kanalı
-const CLOUD_SYNC_TOPIC = 'servispro_akifkilic_sync';
-const VERCEL_SYNC_ENDPOINT = 'https://servis-pro-seven.vercel.app/api/sync';
-
 // Merkezi cPanel MySQL REST API Adresi
 export const getMySqlApiUrl = () => {
   if (typeof window !== 'undefined') {
@@ -17,10 +13,21 @@ export const getMySqlApiUrl = () => {
       }
       return `${window.location.origin}/api.php`;
     }
-    // Vercel, localhost veya telefon PWA üzerinden doğrudan MySQL API
     return 'https://izmirimteknik.com/servispro/api.php';
   }
   return 'https://izmirimteknik.com/servispro/api.php';
+};
+
+export const getBaseWebUrl = () => {
+  if (typeof window !== 'undefined' && window.location.hostname.includes('izmirimteknik.com')) {
+    const isSub = window.location.pathname.includes('/servispro');
+    return `${window.location.origin}${isSub ? '/servispro' : ''}`;
+  }
+  return 'https://izmirimteknik.com/servispro';
+};
+
+export const getCloudSyncEndpoint = () => {
+  return `${getMySqlApiUrl()}?action=cloud_sync`;
 };
 
 export interface OfflineMutation {
@@ -169,7 +176,7 @@ class SyncService {
     if (clickUrl) {
       if (clickUrl.includes('tjson=')) {
         try {
-          const url = new URL(clickUrl, 'https://servis-pro-seven.vercel.app');
+          const url = new URL(clickUrl, getBaseWebUrl());
           const encoded = url.searchParams.get('tjson');
           if (encoded) {
             const ticket = JSON.parse(decodeURIComponent(encoded));
@@ -183,7 +190,7 @@ class SyncService {
         } catch {}
       } else if (clickUrl.includes('ujson=')) {
         try {
-          const url = new URL(clickUrl, 'https://servis-pro-seven.vercel.app');
+          const url = new URL(clickUrl, getBaseWebUrl());
           const encoded = url.searchParams.get('ujson');
           if (encoded) {
             const updateData = JSON.parse(decodeURIComponent(encoded));
@@ -256,7 +263,7 @@ class SyncService {
   // Buluttaki bekleyen tüm yeni mesajları ve işleri sorgula (Ekran açıldığında ve periyodik)
   public async checkMissedCloudMessages() {
     try {
-      const pollRes = await fetch(`${VERCEL_SYNC_ENDPOINT}?since=${this.lastPollTimestamp}`, {
+      const pollRes = await fetch(`${getCloudSyncEndpoint()}&since=${this.lastPollTimestamp}`, {
         signal: AbortSignal.timeout(5000)
       });
       if (pollRes.ok) {
@@ -727,7 +734,7 @@ class SyncService {
 
       const updateData = { id: ticketId, ...updates };
       const encodedUpdate = encodeURIComponent(JSON.stringify(updateData));
-      const targetUrl = `https://servis-pro-seven.vercel.app/?mode=technician&ticket=${ticketId}&sid=${this.clientId}&ujson=${encodedUpdate}`;
+      const targetUrl = `${getBaseWebUrl()}/?mode=technician&ticket=${ticketId}&sid=${this.clientId}&ujson=${encodedUpdate}`;
 
       const custName = updates.customerName || '';
       const tNum = updates.ticketNumber || ticketId;
@@ -738,12 +745,11 @@ class SyncService {
         `⏰ Saat: ${new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}`
       ].filter(Boolean).join('\n');
 
-      // 1. Vercel Bulut Kanalına Anında Yayınla (Ofis PC'ye doğrudan düşer)
-      fetch(VERCEL_SYNC_ENDPOINT, {
+      // 1. Merkezi cPanel Bulut Kanalına Anında Yayınla (Ofis PC'ye doğrudan düşer)
+      fetch(getCloudSyncEndpoint(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          topic: CLOUD_SYNC_TOPIC,
           title: `✅ ${statusDesc}`,
           message: cleanMsg,
           priority: 4,
@@ -795,14 +801,13 @@ class SyncService {
 
       // Fiş verisini URL parametresine gömüyoruz
       const encodedTicket = encodeURIComponent(JSON.stringify(ticket));
-      const targetUrl = `https://servis-pro-seven.vercel.app/?mode=technician&ticket=${ticket.id}&sid=${this.clientId}&tjson=${encodedTicket}`;
+      const targetUrl = `${getBaseWebUrl()}/?mode=technician&ticket=${ticket.id}&sid=${this.clientId}&tjson=${encodedTicket}`;
 
-      // Yüksek Öncelikli Global Bulut Bildirimi (Vercel Proxy Üzerinden Kesintisiz)
-      fetch(VERCEL_SYNC_ENDPOINT, {
+      // Yüksek Öncelikli Global Bulut Bildirimi (Doğrudan izmirimteknik cPanel Köprüsü)
+      fetch(getCloudSyncEndpoint(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          topic: CLOUD_SYNC_TOPIC,
           title: `🚨 YENİ SERVİS İŞİ: ${ticket.ticketNumber}`,
           message: humanReadableText,
           priority: 5,
