@@ -233,6 +233,7 @@ export const TicketList: React.FC<TicketListProps> = ({
             <option value="all">Tüm Durumlar</option>
             <option value="pending">Yeni / Beklemede</option>
             <option value="scheduled">Ziyaret Planlandı</option>
+            <option value="on_way">🚗 Yolda / Servise Gidiliyor</option>
             <option value="in_repair">Onarımda</option>
             <option value="waiting_parts">Parça Bekleniyor</option>
             <option value="testing">Test Aşamasında</option>

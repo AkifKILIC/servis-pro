@@ -248,6 +248,34 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
     filter === 'completed' ? completedTickets :
     urgentTickets;
 
+  // Saha Çalışanı "Yola Çıktım / Adrese Gidiyorum" Bilgisi Gönderir (Madde 5)
+  const handleSetOnWay = (ticket: ServiceTicket) => {
+    onUpdateTicket(ticket.id, {
+      ticketNumber: ticket.ticketNumber,
+      customerName: ticket.customerName,
+      status: 'on_way',
+      technicianDiagnosis: ticket.technicianDiagnosis || 'Saha ustası adrese gitmek üzere yola çıktı.',
+      updatedAt: new Date().toISOString()
+    });
+
+    // Ofise ve sisteme anında canlı bildirim fırlat
+    syncService.sendTechnicianAlert(ticket, `🚗 SAHA USTASI YOLA ÇIKTI: ${ticket.customerName} adresine gidiyor!`);
+  };
+
+  // Saha Çalışanı "Adrese Vardım / İncelemeye Başla" Bilgisi Gönderir (Madde 5)
+  const handleArrivedAtAddress = (ticket: ServiceTicket) => {
+    onUpdateTicket(ticket.id, {
+      ticketNumber: ticket.ticketNumber,
+      customerName: ticket.customerName,
+      status: 'in_repair',
+      technicianDiagnosis: ticket.technicianDiagnosis || 'Usta adrese ulaştı, arıza incelemesine başlandı.',
+      updatedAt: new Date().toISOString()
+    });
+
+    syncService.sendTechnicianAlert(ticket, `📍 USTA ADRESE ULAŞTI: ${ticket.customerName} adresinde arıza tespiti yapılıyor.`);
+    openInspectionModal({ ...ticket, status: 'in_repair' });
+  };
+
   // Detaylı İnceleme Modalını Aç
   const openInspectionModal = (ticket: ServiceTicket) => {
     setInspectingTicket(ticket);
@@ -256,8 +284,8 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
     setInspectLaborCost(ticket.laborCost || 0);
     setInspectTransportCost(ticket.transportCost || 0);
     setInspectDiscount(ticket.discount || 0);
-    // Kullanıcı talebi: Ayrıntıları İncele modalında ödeme durumu varsayılan (default) olarak 'pending_approval' (Tahsil Edildi - Ofis Onayı Bekliyor) gelsin
-    setInspectPaymentStatus(ticket.paymentStatus === 'paid' ? 'paid' : 'pending_approval');
+    // DÜZELTME (Madde 4): Fiş henüz ödenmemişse 'unpaid' kalır, otomatik 'pending_approval' dayatılmaz!
+    setInspectPaymentStatus(ticket.paymentStatus || 'unpaid');
     setInspectPaymentMethod(ticket.paymentMethod || 'cash');
     setInspectParts(ticket.partsUsed ? [...ticket.partsUsed] : []);
     setIsAddingPart(false);
@@ -313,11 +341,23 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
     const partsTotal = inspectParts.reduce((sum, p) => sum + (p.totalPrice || 0), 0);
     const finalTotal = Math.max(0, partsTotal + inspectLaborCost + inspectTransportCost - inspectDiscount);
     const finalStatus: TicketStatus = markDeliveredAndPaid ? 'delivered' : inspectStatus;
-    // Saha ustası tahsilat aldığında ofis onayına gönderilir
-    const finalPayStatus: PaymentStatus = markDeliveredAndPaid 
-      ? 'pending_approval' 
-      : (inspectPaymentStatus === 'paid' ? 'pending_approval' : inspectPaymentStatus);
-    const paidAmount = (finalPayStatus === 'pending_approval' || finalPayStatus === 'partial') ? finalTotal : inspectingTicket.paidAmount;
+
+    // DÜZELTME (Madde 4): Parça bekleniyor, onarımda veya yolda durumlarında girilen fiyat işçilik/parça teklifidir!
+    // Bu durumlarda kesinlikle tahsilat onayı olarak işaretlenmez, 'unpaid' kalır.
+    let finalPayStatus: PaymentStatus = inspectPaymentStatus;
+    if (markDeliveredAndPaid) {
+      finalPayStatus = 'pending_approval';
+    } else if (finalStatus === 'waiting_parts' || finalStatus === 'in_repair' || finalStatus === 'on_way' || finalStatus === 'pending') {
+      if (finalPayStatus === 'pending_approval') {
+        finalPayStatus = 'unpaid';
+      }
+    } else if (finalPayStatus === 'paid') {
+      finalPayStatus = 'pending_approval';
+    }
+
+    const paidAmount = (finalPayStatus === 'pending_approval' || finalPayStatus === 'paid') 
+      ? finalTotal 
+      : (finalPayStatus === 'partial' ? inspectingTicket.paidAmount : 0);
 
     onUpdateTicket(inspectingTicket.id, {
       ticketNumber: inspectingTicket.ticketNumber,
@@ -1025,6 +1065,78 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
                   </div>
                 </div>
 
+                {/* Madde 5: Saha Ustası Gittiği Servisi Ofise Bilgi Amaçlı Seçer */}
+                {ticket.status !== 'delivered' && ticket.status !== 'ready' && (
+                  <div style={{ marginBottom: '2px' }}>
+                    {ticket.status === 'on_way' ? (
+                      <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '8px' }}>
+                        <div style={{ 
+                          background: 'rgba(14, 165, 233, 0.18)', 
+                          border: '1px solid #38bdf8', 
+                          borderRadius: '10px', 
+                          padding: '9px 10px', 
+                          display: 'flex', 
+                          alignItems: 'center', 
+                          justifyContent: 'center', 
+                          gap: '6px',
+                          fontSize: '0.82rem',
+                          fontWeight: 800,
+                          color: '#38bdf8'
+                        }}>
+                          <span>🚗 Yoldasınız (Ofis Bildirildi)</span>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn"
+                          style={{
+                            background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                            color: '#fff',
+                            fontWeight: 800,
+                            fontSize: '0.84rem',
+                            padding: '9px 10px',
+                            borderRadius: '10px',
+                            border: 'none',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '6px',
+                            boxShadow: '0 3px 10px rgba(16, 185, 129, 0.35)',
+                            cursor: 'pointer'
+                          }}
+                          onClick={() => handleArrivedAtAddress(ticket)}
+                        >
+                          <MapPin size={15} />
+                          <span>📍 Adrese Vardım</span>
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn"
+                        style={{
+                          width: '100%',
+                          background: 'linear-gradient(135deg, rgba(14, 165, 233, 0.2) 0%, rgba(2, 132, 199, 0.35) 100%)',
+                          color: '#38bdf8',
+                          border: '1px solid rgba(56, 189, 248, 0.55)',
+                          fontWeight: 800,
+                          fontSize: '0.88rem',
+                          padding: '10px 14px',
+                          borderRadius: '10px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '8px',
+                          cursor: 'pointer'
+                        }}
+                        onClick={() => handleSetOnWay(ticket)}
+                      >
+                        <Navigation size={16} />
+                        <span>🚗 Bu Servise Gidiyorum (Ofise Bildir)</span>
+                      </button>
+                    )}
+                  </div>
+                )}
+
                 {/* YENİ: Ayrıntıları İncele & Tüm Saha İşlemleri Butonu */}
                 <button 
                   type="button"
@@ -1263,15 +1375,28 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
                   className="form-control"
                   style={{ height: '48px', fontSize: '0.95rem', fontWeight: 600, borderRadius: '10px' }}
                   value={inspectStatus}
-                  onChange={e => setInspectStatus(e.target.value as any)}
+                  onChange={e => {
+                    const nextSt = e.target.value as TicketStatus;
+                    setInspectStatus(nextSt);
+                    if (nextSt === 'waiting_parts' && inspectPaymentStatus === 'pending_approval') {
+                      setInspectPaymentStatus('unpaid');
+                    }
+                  }}
                 >
-                  <option value="scheduled">⏳ Ziyaret Planlandı / Yolda</option>
+                  <option value="scheduled">⏳ Ziyaret Planlandı / Beklemede</option>
+                  <option value="on_way">🚗 Yolda / Adrese Gidiliyor</option>
                   <option value="in_repair">🔧 İş Alındı / Onarımda</option>
                   <option value="waiting_parts">📦 Parça Bekleniyor (Tedarikte)</option>
                   <option value="ready">✅ Onarım Tamamlandı / Teslime Hazır</option>
                   <option value="delivered">🏁 Teslim & Tahsil Edildi (İşi Kapat)</option>
                   <option value="cancelled">❌ İptal / İade</option>
                 </select>
+
+                {inspectStatus === 'waiting_parts' && (
+                  <div style={{ marginTop: '8px', padding: '10px 12px', background: 'rgba(236, 72, 153, 0.12)', border: '1px solid rgba(236, 72, 153, 0.35)', borderRadius: '10px', fontSize: '0.84rem', color: '#f472b6', lineHeight: 1.4 }}>
+                    📦 <strong>Parça Bekleniyor Modu:</strong> Girilen parça ve işçilik tutarı müşteriye verilecek teklif/maliyet olarak kaydedilir. Cihaz tamamlanana kadar <strong>tahsilat onayına düşmez</strong>.
+                  </div>
+                )}
               </div>
 
               {/* 4. USTA TEŞHİSİ VE YAPILAN İŞLEM NOTU */}

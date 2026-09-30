@@ -106,15 +106,95 @@ export async function hashPassword(plainText: string): Promise<string> {
   return pureJsSha256(plainText);
 }
 
+// Güvenlik & Kaba Kuvvet (Brute-Force) Saldırı Koruması Ayarları
+const FAILED_ATTEMPTS_KEY = 'servispro_sec_failed_attempts';
+const LOCKOUT_TIMESTAMP_KEY = 'servispro_sec_lockout_until';
+const MAX_ATTEMPTS_BEFORE_LOCKOUT = 5;
+const INITIAL_LOCKOUT_SECONDS = 60; // 5 hatalı girişte 1 dakika kilit
+const EXTENDED_LOCKOUT_SECONDS = 300; // 10 ve üzeri hatalı girişte 5 dakika kilit
+
+export interface LockoutStatus {
+  isLocked: boolean;
+  remainingSeconds: number;
+  failedAttempts: number;
+}
+
+// Kilit durumunu kontrol et
+export function getLockoutStatus(): LockoutStatus {
+  if (typeof localStorage === 'undefined') {
+    return { isLocked: false, remainingSeconds: 0, failedAttempts: 0 };
+  }
+  const failedAttempts = parseInt(localStorage.getItem(FAILED_ATTEMPTS_KEY) || '0', 10);
+  const lockoutUntil = parseInt(localStorage.getItem(LOCKOUT_TIMESTAMP_KEY) || '0', 10);
+  const now = Date.now();
+
+  if (lockoutUntil > now) {
+    const remainingSeconds = Math.ceil((lockoutUntil - now) / 1000);
+    return { isLocked: true, remainingSeconds, failedAttempts };
+  }
+
+  // Kilit süresi dolmuşsa kilidi temizle
+  if (lockoutUntil > 0 && lockoutUntil <= now) {
+    localStorage.removeItem(LOCKOUT_TIMESTAMP_KEY);
+  }
+
+  return { isLocked: false, remainingSeconds: 0, failedAttempts };
+}
+
+// Hatalı giriş kaydet ve gerekirse kilitle
+export function recordFailedLogin(): LockoutStatus {
+  if (typeof localStorage === 'undefined') {
+    return { isLocked: false, remainingSeconds: 0, failedAttempts: 1 };
+  }
+  let attempts = parseInt(localStorage.getItem(FAILED_ATTEMPTS_KEY) || '0', 10) + 1;
+  localStorage.setItem(FAILED_ATTEMPTS_KEY, attempts.toString());
+
+  if (attempts >= MAX_ATTEMPTS_BEFORE_LOCKOUT) {
+    const lockoutDuration = attempts >= 10 ? EXTENDED_LOCKOUT_SECONDS : INITIAL_LOCKOUT_SECONDS;
+    const lockoutUntil = Date.now() + lockoutDuration * 1000;
+    localStorage.setItem(LOCKOUT_TIMESTAMP_KEY, lockoutUntil.toString());
+    return { isLocked: true, remainingSeconds: lockoutDuration, failedAttempts: attempts };
+  }
+
+  return { isLocked: false, remainingSeconds: 0, failedAttempts: attempts };
+}
+
+// Başarılı girişte deneme sayacını sıfırla
+export function resetLoginAttempts(): void {
+  if (typeof localStorage === 'undefined') return;
+  localStorage.removeItem(FAILED_ATTEMPTS_KEY);
+  localStorage.removeItem(LOCKOUT_TIMESTAMP_KEY);
+}
+
+// Güvenli Girdi Temizleme (Sanitization)
+export function sanitizeAuthInput(input: string): string {
+  if (!input) return '';
+  // Kontrol karakterlerini ve potansiyel zararlı boşlukları temizle
+  return input.replace(/[\x00-\x1F\x7F]/g, '').trim();
+}
+
 // Admin Giriş Doğrulama
 export async function verifyAdminCredentials(username: string, passwordText: string): Promise<AuthUser | null> {
-  const cleanUser = (username || '').trim().toLowerCase();
-  if (!ALLOWED_USERNAMES.includes(cleanUser)) {
+  const lockout = getLockoutStatus();
+  if (lockout.isLocked) {
+    throw new Error(`Güvenlik Koruması: Çok fazla başarısız deneme! Lütfen ${lockout.remainingSeconds} saniye bekleyiniz.`);
+  }
+
+  const cleanUser = sanitizeAuthInput(username).toLowerCase();
+  const cleanPass = (passwordText || '').trim();
+
+  if (!cleanUser || !cleanPass) {
     return null;
   }
 
-  const computedHash = await hashPassword(passwordText);
+  if (!ALLOWED_USERNAMES.includes(cleanUser)) {
+    recordFailedLogin();
+    return null;
+  }
+
+  const computedHash = await hashPassword(cleanPass);
   if (computedHash === ADMIN_PASSWORD_HASH) {
+    resetLoginAttempts();
     return {
       username: cleanUser,
       role: 'admin',
@@ -124,6 +204,7 @@ export async function verifyAdminCredentials(username: string, passwordText: str
     };
   }
 
+  recordFailedLogin();
   return null;
 }
 

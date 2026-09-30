@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { X, UserPlus, Check, Sparkles, Calendar, Clock, MapPin, Phone, User, Wrench } from 'lucide-react';
 import { Customer, ServiceTicket, DeviceType, Priority } from '../types';
-import { COMMON_BRANDS, deviceTypeConfig, getLocalDateString } from '../utils/helpers';
+import { COMMON_BRANDS, deviceTypeConfig, getLocalDateString, IZMIR_DISTRICTS, BUCA_NEIGHBORHOODS } from '../utils/helpers';
 
 interface TicketModalProps {
   isOpen: boolean;
@@ -37,10 +37,12 @@ export const TicketModal: React.FC<TicketModalProps> = ({
   const [isNewCustomer, setIsNewCustomer] = useState(customers.length === 0);
   const [selectedCustomerId, setSelectedCustomerId] = useState(initialTicket?.customerId || (customers[0]?.id || ''));
 
-  // Yeni Müşteri Alanları
+  // Yeni Müşteri Alanları (Varsayılan İzmir / Buca)
   const [newCustName, setNewCustName] = useState('');
   const [newCustPhone, setNewCustPhone] = useState('');
-  const [newCustDistrict, setNewCustDistrict] = useState('');
+  const [newCustCity, setNewCustCity] = useState('İzmir');
+  const [newCustDistrict, setNewCustDistrict] = useState('Buca');
+  const [newCustNeighborhood, setNewCustNeighborhood] = useState('');
   const [newCustAddress, setNewCustAddress] = useState('');
 
   // Fiş Alanları
@@ -72,29 +74,48 @@ export const TicketModal: React.FC<TicketModalProps> = ({
         alert('Lütfen müşteri adı ve telefon numarasını giriniz.');
         return;
       }
+
+      const cleanCity = newCustCity.trim() || 'İzmir';
+      const cleanDistrict = newCustDistrict.trim() || 'Buca';
+      const cleanNeighborhood = newCustNeighborhood.trim();
+      const cleanAddress = newCustAddress.trim();
+
       newCustPayload = {
         fullName: newCustName.trim(),
         phone: newCustPhone.trim(),
-        city: 'İstanbul',
-        district: newCustDistrict.trim(),
-        address: newCustAddress.trim(),
+        city: cleanCity,
+        district: cleanDistrict,
+        neighborhood: cleanNeighborhood,
+        address: cleanAddress,
       };
+
+      // Fiş üzerinde gösterilecek detaylı adres formatı
+      const fullDisplayAddr = [
+        cleanNeighborhood ? `${cleanNeighborhood} Mah.` : '',
+        cleanAddress,
+        `(${cleanDistrict})`
+      ].filter(Boolean).join(' ');
+
       customerInfo = {
         customerId: '',
         customerName: newCustName.trim(),
         customerPhone: newCustPhone.trim(),
-        customerAddress: newCustDistrict.trim() 
-          ? `${newCustAddress.trim()} (${newCustDistrict.trim()})`
-          : newCustAddress.trim(),
+        customerAddress: fullDisplayAddr,
       };
     } else {
       const existing = customers.find(c => c.id === selectedCustomerId);
       if (existing) {
+        const fullDisplayAddr = [
+          existing.neighborhood ? `${existing.neighborhood} Mah.` : '',
+          existing.address,
+          existing.district ? `(${existing.district})` : ''
+        ].filter(Boolean).join(' ');
+
         customerInfo = {
           customerId: existing.id,
           customerName: existing.fullName,
           customerPhone: existing.phone,
-          customerAddress: existing.district ? `${existing.address} (${existing.district})` : existing.address,
+          customerAddress: fullDisplayAddr || existing.address,
         };
       }
     }
@@ -218,25 +239,79 @@ export const TicketModal: React.FC<TicketModalProps> = ({
 
                   <div className="grid-2">
                     <div className="form-group" style={{ marginBottom: 0 }}>
-                      <label className="form-label">İlçe / Bölge</label>
+                      <label className="form-label">İl</label>
                       <input 
                         type="text" 
                         className="form-control" 
-                        placeholder="Örn: Kadıköy / Bostancı" 
-                        value={newCustDistrict}
-                        onChange={e => setNewCustDistrict(e.target.value)}
+                        placeholder="İl (Örn: İzmir)" 
+                        value={newCustCity}
+                        onChange={e => setNewCustCity(e.target.value)}
                       />
                     </div>
                     <div className="form-group" style={{ marginBottom: 0 }}>
-                      <label className="form-label">Açık Adres (Cadde, Sokak, No)</label>
+                      <label className="form-label">İlçe</label>
                       <input 
                         type="text" 
+                        list="ticket-district-list"
                         className="form-control" 
-                        placeholder="Örn: Bağdat Cad. No: 42 D: 5" 
-                        value={newCustAddress}
-                        onChange={e => setNewCustAddress(e.target.value)}
+                        placeholder="İlçe (Örn: Buca)" 
+                        value={newCustDistrict}
+                        onChange={e => setNewCustDistrict(e.target.value)}
                       />
+                      <datalist id="ticket-district-list">
+                        {IZMIR_DISTRICTS.map(d => <option key={d} value={d} />)}
+                      </datalist>
                     </div>
+                  </div>
+
+                  {/* Mahalle Alanı ve Hızlı Seçim */}
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '3px' }}>
+                      <label className="form-label" style={{ marginBottom: 0 }}>Mahalle / Semt</label>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Buca Mahalleleri</span>
+                    </div>
+                    <input 
+                      type="text" 
+                      list="ticket-neighborhood-list"
+                      className="form-control" 
+                      placeholder="Örn: Akıncılar, Şirinyer, Efeler, Yaylacık..." 
+                      value={newCustNeighborhood}
+                      onChange={e => setNewCustNeighborhood(e.target.value)}
+                    />
+                    <datalist id="ticket-neighborhood-list">
+                      {BUCA_NEIGHBORHOODS.map(n => <option key={n} value={n} />)}
+                    </datalist>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '5px' }}>
+                      {['Şirinyer', 'Akıncılar', 'Yaylacık', 'Efeler', 'Göksu', 'Güven', 'Adatepe'].map(m => (
+                        <button
+                          key={m}
+                          type="button"
+                          onClick={() => setNewCustNeighborhood(m)}
+                          style={{
+                            fontSize: '0.7rem',
+                            padding: '1px 6px',
+                            borderRadius: '5px',
+                            border: newCustNeighborhood === m ? '1px solid var(--primary)' : '1px solid var(--border-subtle)',
+                            background: newCustNeighborhood === m ? 'rgba(99, 102, 241, 0.25)' : 'rgba(255, 255, 255, 0.03)',
+                            color: newCustNeighborhood === m ? 'var(--primary)' : 'var(--text-muted)',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          {m}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label">Cadde / Sokak / Bina No / Kat / Daire</label>
+                    <input 
+                      type="text" 
+                      className="form-control" 
+                      placeholder="Örn: 205/32 Sokak No:3 Daire:5" 
+                      value={newCustAddress}
+                      onChange={e => setNewCustAddress(e.target.value)}
+                    />
                   </div>
                 </div>
               )}

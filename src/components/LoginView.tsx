@@ -9,7 +9,7 @@ import {
   ShieldCheck, 
   AlertCircle 
 } from 'lucide-react';
-import { AuthUser, verifyAdminCredentials, saveAuthSession } from '../utils/auth';
+import { AuthUser, verifyAdminCredentials, saveAuthSession, getLockoutStatus, LockoutStatus } from '../utils/auth';
 import { initAudioContext, playNotificationSound } from '../utils/notifications';
 
 interface LoginViewProps {
@@ -24,9 +24,34 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, shopName }
   const [rememberMe, setRememberMe] = useState(true);
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [lockout, setLockout] = useState<LockoutStatus>(() => getLockoutStatus());
+
+  // Kilit geri sayım zamanlayıcısı
+  React.useEffect(() => {
+    if (!lockout.isLocked) return;
+
+    const timer = setInterval(() => {
+      const current = getLockoutStatus();
+      setLockout(current);
+      if (!current.isLocked) {
+        clearInterval(timer);
+        setError('');
+      }
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [lockout.isLocked]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    const currentLockout = getLockoutStatus();
+    if (currentLockout.isLocked) {
+      setLockout(currentLockout);
+      setError(`Güvenlik Koruması: Çok fazla hatalı deneme yapıldı! Lütfen ${currentLockout.remainingSeconds} saniye bekleyin.`);
+      return;
+    }
+
     if (!username.trim() || !password) {
       setError('Lütfen kullanıcı adı ve şifrenizi giriniz.');
       return;
@@ -52,11 +77,21 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, shopName }
         }, 300);
       } else {
         setIsSubmitting(false);
-        setError('Hatalı kullanıcı adı veya şifre! Lütfen bilgilerinizi kontrol ediniz.');
+        const updatedLockout = getLockoutStatus();
+        setLockout(updatedLockout);
+        if (updatedLockout.isLocked) {
+          setError(`Güvenlik Koruması: Art arda 5 hatalı giriş! Sistem ${updatedLockout.remainingSeconds} saniyeliğine kilitlendi.`);
+        } else if (updatedLockout.failedAttempts >= 3) {
+          setError(`Hatalı kullanıcı adı veya şifre! (Kalan deneme hakkı: ${5 - updatedLockout.failedAttempts})`);
+        } else {
+          setError('Hatalı kullanıcı adı veya şifre! Lütfen bilgilerinizi kontrol ediniz.');
+        }
       }
-    } catch {
+    } catch (err: any) {
       setIsSubmitting(false);
-      setError('Giriş yapılırken bir hata oluştu. Lütfen tekrar deneyiniz.');
+      const updatedLockout = getLockoutStatus();
+      setLockout(updatedLockout);
+      setError(err?.message || 'Giriş yapılırken bir hata oluştu. Lütfen tekrar deneyiniz.');
     }
   };
 
@@ -159,8 +194,31 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, shopName }
             </p>
           </div>
 
-          {/* Hata Bildirimi */}
-          {error && (
+          {/* Kilitlenme Bildirimi */}
+          {lockout.isLocked && (
+            <div 
+              style={{ 
+                background: 'rgba(239, 68, 68, 0.2)', 
+                border: '1px solid #ef4444', 
+                borderRadius: '14px', 
+                padding: '14px 16px', 
+                textAlign: 'center', 
+                marginBottom: '18px', 
+                color: '#fca5a5' 
+              }}
+            >
+              <div style={{ fontWeight: 800, fontSize: '0.96rem', color: '#ef4444', marginBottom: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                <Lock size={18} />
+                <span>GÜVENLİK KİLİDİ AKTİF ({lockout.remainingSeconds}s)</span>
+              </div>
+              <div style={{ fontSize: '0.84rem', lineHeight: 1.4 }}>
+                Çok sayıda başarısız deneme nedeniyle form geçici olarak kilitlendi. Lütfen <strong>{lockout.remainingSeconds} saniye</strong> sonra tekrar deneyiniz.
+              </div>
+            </div>
+          )}
+
+          {/* Hata Bildirimi (Kilitli değilken) */}
+          {!lockout.isLocked && error && (
             <div 
               style={{ 
                 background: 'rgba(239, 68, 68, 0.15)', 
@@ -204,14 +262,16 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, shopName }
                 <input 
                   type="text" 
                   className="form-control" 
+                  disabled={lockout.isLocked}
                   style={{ 
                     height: '48px', 
                     paddingLeft: '44px', 
                     fontSize: '1rem', 
                     borderRadius: '12px',
-                    background: 'rgba(30, 41, 59, 0.6)',
+                    background: lockout.isLocked ? 'rgba(30, 41, 59, 0.3)' : 'rgba(30, 41, 59, 0.6)',
                     borderColor: 'rgba(255, 255, 255, 0.12)',
-                    color: '#f8fafc'
+                    color: lockout.isLocked ? '#64748b' : '#f8fafc',
+                    cursor: lockout.isLocked ? 'not-allowed' : 'text'
                   }}
                   placeholder="örn: admin"
                   value={username}
@@ -249,15 +309,17 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, shopName }
                 <input 
                   type={showPassword ? 'text' : 'password'} 
                   className="form-control" 
+                  disabled={lockout.isLocked}
                   style={{ 
                     height: '48px', 
                     paddingLeft: '44px', 
                     paddingRight: '44px',
                     fontSize: '1rem', 
                     borderRadius: '12px',
-                    background: 'rgba(30, 41, 59, 0.6)',
+                    background: lockout.isLocked ? 'rgba(30, 41, 59, 0.3)' : 'rgba(30, 41, 59, 0.6)',
                     borderColor: 'rgba(255, 255, 255, 0.12)',
-                    color: '#f8fafc'
+                    color: lockout.isLocked ? '#64748b' : '#f8fafc',
+                    cursor: lockout.isLocked ? 'not-allowed' : 'text'
                   }}
                   placeholder="••••••••"
                   value={password}
@@ -269,6 +331,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, shopName }
                 />
                 <button
                   type="button"
+                  disabled={lockout.isLocked}
                   onClick={() => setShowPassword(!showPassword)}
                   style={{
                     position: 'absolute',
@@ -278,7 +341,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, shopName }
                     background: 'transparent',
                     border: 'none',
                     color: '#94a3b8',
-                    cursor: 'pointer',
+                    cursor: lockout.isLocked ? 'not-allowed' : 'pointer',
                     padding: '4px',
                     display: 'flex',
                     alignItems: 'center'
@@ -292,12 +355,13 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, shopName }
 
             {/* Beni Hatırla */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '2px' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.84rem', color: '#cbd5e1', userSelect: 'none' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: lockout.isLocked ? 'not-allowed' : 'pointer', fontSize: '0.84rem', color: '#cbd5e1', userSelect: 'none' }}>
                 <input 
                   type="checkbox" 
+                  disabled={lockout.isLocked}
                   checked={rememberMe}
                   onChange={e => setRememberMe(e.target.checked)}
-                  style={{ width: '16px', height: '16px', accentColor: '#6366f1', cursor: 'pointer' }}
+                  style={{ width: '16px', height: '16px', accentColor: '#6366f1', cursor: lockout.isLocked ? 'not-allowed' : 'pointer' }}
                 />
                 <span>Beni bu cihazda hatırla (1 yıl)</span>
               </label>
@@ -306,7 +370,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, shopName }
             {/* Giriş Yap Butonu */}
             <button 
               type="submit" 
-              disabled={isSubmitting}
+              disabled={isSubmitting || lockout.isLocked}
               className="btn btn-primary" 
               style={{ 
                 width: '100%', 
@@ -314,14 +378,19 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, shopName }
                 fontSize: '1.02rem', 
                 fontWeight: 800, 
                 borderRadius: '14px',
-                background: 'linear-gradient(135deg, #6366f1 0%, #3b82f6 100%)',
-                boxShadow: '0 8px 24px rgba(99, 102, 241, 0.35)',
+                background: lockout.isLocked 
+                  ? 'rgba(75, 85, 99, 0.5)' 
+                  : 'linear-gradient(135deg, #6366f1 0%, #3b82f6 100%)',
+                boxShadow: lockout.isLocked ? 'none' : '0 8px 24px rgba(99, 102, 241, 0.35)',
+                cursor: lockout.isLocked ? 'not-allowed' : 'pointer',
                 justifyContent: 'center',
                 gap: '8px',
                 marginTop: '6px'
               }}
             >
-              {isSubmitting ? (
+              {lockout.isLocked ? (
+                <span>⏳ Bekleyiniz ({lockout.remainingSeconds}s)</span>
+              ) : isSubmitting ? (
                 <span>Giriş Yapılıyor...</span>
               ) : (
                 <>

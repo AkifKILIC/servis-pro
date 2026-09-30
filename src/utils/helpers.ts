@@ -225,12 +225,70 @@ export const deviceTypeConfig: Record<DeviceType, { label: string; icon: string;
   },
 };
 
+export const IZMIR_DISTRICTS = [
+  'Buca',
+  'Karabağlar',
+  'Bornova',
+  'Konak',
+  'Bayraklı',
+  'Karşıyaka',
+  'Gaziemir',
+  'Balçova',
+  'Çiğli',
+  'Narlıdere',
+  'Menemen',
+  'Torbalı',
+  'Menderes',
+  'Kemalpaşa',
+  'Güzelbahçe',
+  'Urla',
+  'Seferihisar'
+];
+
+export const BUCA_NEIGHBORHOODS = [
+  'Akıncılar',
+  'Şirinyer',
+  'Yaylacık',
+  'Efeler',
+  'Vali Rahmi Bey',
+  'Barış',
+  'Göksu',
+  'Güven',
+  'Çamlıkule',
+  'Adatepe',
+  'Buca Koop',
+  'Yenigün',
+  'Menderes',
+  'Ufuk',
+  'İzkent',
+  'Çaldıran',
+  'İnönü',
+  'Hürriyet',
+  'Dumlupınar',
+  'Laleli',
+  'Yeşilbağlar',
+  'Yıldız',
+  'Zafer',
+  'Kozağaç',
+  'Mustafa Kemal',
+  'Seyhan',
+  'Kuruçeşme',
+  'Doğancılar',
+  'Kaynaklar'
+];
+
 export const ticketStatusConfig: Record<TicketStatus, { label: string; bg: string; color: string; step: number }> = {
   pending: {
     label: 'Yeni Kayıt / Beklemede',
     bg: 'rgba(107, 114, 128, 0.15)',
     color: '#9ca3af',
     step: 1,
+  },
+  on_way: {
+    label: '🚗 Yolda / Servise Gidiliyor',
+    bg: 'rgba(14, 165, 233, 0.18)',
+    color: '#38bdf8',
+    step: 2,
   },
   scheduled: {
     label: 'Ziyaret Planlandı',

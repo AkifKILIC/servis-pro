@@ -10,6 +10,7 @@ export type DeviceType =
 
 export type TicketStatus = 
   | 'pending'           // Yeni Kayıt / Beklemede
+  | 'on_way'            // Yoldayım / Servise Gidiliyor
   | 'scheduled'         // Saha Ziyareti Planlandı
   | 'in_repair'         // Atölyede / Onarımda
   | 'waiting_parts'     // Parça Bekleniyor

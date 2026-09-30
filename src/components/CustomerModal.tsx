@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { X, Check } from 'lucide-react';
+import { X, MapPin, Building, Home, Check } from 'lucide-react';
 import { Customer } from '../types';
+import { IZMIR_DISTRICTS, BUCA_NEIGHBORHOODS } from '../utils/helpers';
 
 interface CustomerModalProps {
   isOpen: boolean;
@@ -19,8 +20,8 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({
 
   const [fullName, setFullName] = useState(initialCustomer?.fullName || '');
   const [phone, setPhone] = useState(initialCustomer?.phone || '');
-  const [city, setCity] = useState(initialCustomer?.city || 'İstanbul');
-  const [district, setDistrict] = useState(initialCustomer?.district || '');
+  const [city, setCity] = useState(initialCustomer?.city || 'İzmir');
+  const [district, setDistrict] = useState(initialCustomer?.district || 'Buca');
   const [neighborhood, setNeighborhood] = useState(initialCustomer?.neighborhood || '');
   const [address, setAddress] = useState(initialCustomer?.address || '');
   const [notes, setNotes] = useState(initialCustomer?.notes || '');
@@ -29,10 +30,10 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({
     if (initialCustomer) {
       setFullName(initialCustomer.fullName);
       setPhone(initialCustomer.phone);
-      setCity(initialCustomer.city);
-      setDistrict(initialCustomer.district);
+      setCity(initialCustomer.city || 'İzmir');
+      setDistrict(initialCustomer.district || 'Buca');
       setNeighborhood(initialCustomer.neighborhood || '');
-      setAddress(initialCustomer.address);
+      setAddress(initialCustomer.address || '');
       setNotes(initialCustomer.notes || '');
     }
   }, [initialCustomer]);
@@ -47,8 +48,8 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({
     onSubmit({
       fullName: fullName.trim(),
       phone: phone.trim(),
-      city: city.trim(),
-      district: district.trim(),
+      city: city.trim() || 'İzmir',
+      district: district.trim() || 'Buca',
       neighborhood: neighborhood.trim(),
       address: address.trim(),
       notes: notes.trim(),
@@ -59,16 +60,21 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-box" onClick={e => e.stopPropagation()} style={{ maxWidth: '600px' }}>
+      <div className="modal-box" onClick={e => e.stopPropagation()} style={{ maxWidth: '620px' }}>
         <div className="modal-header">
-          <h3>{initialCustomer ? 'Müşteriyi Düzenle' : 'Yeni Müşteri Kaydı'}</h3>
+          <div>
+            <h3>{initialCustomer ? 'Müşteriyi Düzenle' : 'Yeni Müşteri Kaydı'}</h3>
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: 0 }}>
+              İletişim ve ayrıntılı adres bilgilerini eksiksiz giriniz.
+            </p>
+          </div>
           <button className="close-btn" onClick={onClose}>
             <X size={20} />
           </button>
         </div>
 
         <form onSubmit={handleSubmit}>
-          <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <div className="grid-2">
               <div className="form-group" style={{ marginBottom: 0 }}>
                 <label className="form-label">Adı Soyadı *</label>
@@ -95,50 +101,92 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({
               </div>
             </div>
 
-            <div className="grid-2">
-              <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label">İlçe</label>
+            {/* Ayrıntılı Adres Bölümü */}
+            <div style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-subtle)', borderRadius: '10px', padding: '12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '10px', fontSize: '0.85rem', fontWeight: 700, color: 'var(--primary)' }}>
+                <MapPin size={15} />
+                <span>Adres & Konum Bilgileri</span>
+              </div>
+
+              <div className="grid-2" style={{ marginBottom: '10px' }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">İl</label>
+                  <input 
+                    type="text" 
+                    className="form-control" 
+                    placeholder="İl (Örn: İzmir)"
+                    value={city}
+                    onChange={e => setCity(e.target.value)}
+                  />
+                </div>
+
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">İlçe</label>
+                  <input 
+                    type="text" 
+                    list="district-list"
+                    className="form-control" 
+                    placeholder="İlçe (Örn: Buca)"
+                    value={district}
+                    onChange={e => setDistrict(e.target.value)}
+                  />
+                  <datalist id="district-list">
+                    {IZMIR_DISTRICTS.map(d => <option key={d} value={d} />)}
+                  </datalist>
+                </div>
+              </div>
+
+              {/* Mahalle Alanı */}
+              <div className="form-group" style={{ marginBottom: '10px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                  <label className="form-label" style={{ marginBottom: 0 }}>Mahalle / Semt</label>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Buca Mahalleleri hazır listelenir</span>
+                </div>
                 <input 
                   type="text" 
+                  list="neighborhood-list"
                   className="form-control" 
-                  placeholder="Örn: Kadıköy"
-                  value={district}
-                  onChange={e => setDistrict(e.target.value)}
+                  placeholder="Örn: Akıncılar, Şirinyer, Efeler, Yaylacık..."
+                  value={neighborhood}
+                  onChange={e => setNeighborhood(e.target.value)}
                 />
+                <datalist id="neighborhood-list">
+                  {BUCA_NEIGHBORHOODS.map(n => <option key={n} value={n} />)}
+                </datalist>
+
+                {/* Hızlı Mahalle Seçim Butonları */}
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', marginTop: '6px' }}>
+                  {['Şirinyer', 'Akıncılar', 'Yaylacık', 'Efeler', 'Göksu', 'Güven', 'Çamlıkule', 'Buca Koop'].map(m => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setNeighborhood(m)}
+                      style={{
+                        fontSize: '0.72rem',
+                        padding: '2px 7px',
+                        borderRadius: '6px',
+                        border: neighborhood === m ? '1px solid var(--primary)' : '1px solid var(--border-subtle)',
+                        background: neighborhood === m ? 'rgba(99, 102, 241, 0.2)' : 'rgba(255, 255, 255, 0.03)',
+                        color: neighborhood === m ? 'var(--primary)' : 'var(--text-muted)',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      {m}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label">Şehir</label>
-                <input 
-                  type="text" 
+                <label className="form-label">Cadde / Sokak / Bina No / Kat / Daire</label>
+                <textarea 
                   className="form-control" 
-                  placeholder="Örn: İstanbul"
-                  value={city}
-                  onChange={e => setCity(e.target.value)}
+                  rows={2}
+                  placeholder="Örn: 549 Sokak No:22 Kat:2 Daire:4"
+                  value={address}
+                  onChange={e => setAddress(e.target.value)}
                 />
               </div>
-            </div>
-
-            <div className="form-group" style={{ marginBottom: 0 }}>
-              <label className="form-label">Mahalle / Semt</label>
-              <input 
-                type="text" 
-                className="form-control" 
-                placeholder="Örn: Moda"
-                value={neighborhood}
-                onChange={e => setNeighborhood(e.target.value)}
-              />
-            </div>
-
-            <div className="form-group" style={{ marginBottom: 0 }}>
-              <label className="form-label">Açık Adres (Sokak, Bina, Kat, Daire)</label>
-              <textarea 
-                className="form-control" 
-                rows={2}
-                placeholder="Örn: Şair Nefi Sok. Menekşe Apt. No:12 D:4"
-                value={address}
-                onChange={e => setAddress(e.target.value)}
-              />
             </div>
 
             <div className="form-group" style={{ marginBottom: 0 }}>
