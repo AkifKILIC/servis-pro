@@ -74,6 +74,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const waitingPartsTickets = tickets.filter(t => t.status === 'waiting_parts');
   const lowStockParts = parts.filter(p => p.quantity <= p.minStockLevel);
   const pendingApprovalTickets = tickets.filter(t => t.paymentStatus === 'pending_approval');
+  const onWayTickets = tickets.filter(t => t.status === 'on_way');
 
   const totalEarnings = tickets
     .filter(t => t.paymentStatus === 'paid')
@@ -108,6 +109,78 @@ export const Dashboard: React.FC<DashboardProps> = ({
           </button>
         </div>
       </div>
+
+      {/* 🚗 SAHADAKİ VE YOLDAKİ TEKNİSYENLER CANLI RADAR KARTI */}
+      {onWayTickets.length > 0 && (
+        <div 
+          className="card"
+          style={{ 
+            marginBottom: '20px', 
+            background: 'linear-gradient(135deg, rgba(14, 165, 233, 0.15) 0%, rgba(2, 132, 199, 0.08) 100%)', 
+            borderColor: 'rgba(56, 189, 248, 0.45)',
+            padding: '16px 20px',
+            borderRadius: '16px',
+            boxShadow: '0 4px 18px rgba(14, 165, 233, 0.15)'
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px', marginBottom: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span style={{ fontSize: '1.4rem' }}>🚗</span>
+              <div>
+                <strong style={{ fontSize: '1.05rem', color: '#38bdf8' }}>
+                  {onWayTickets.length} Servis Ekibi Şu An Yolda / Adrese Gidiyor
+                </strong>
+                <div style={{ fontSize: '0.84rem', color: 'var(--text-muted)' }}>
+                  Saha personeli yola çıktığını bildirdi; canlı konumu ve müşteri detaylarını anlık takip edebilirsiniz.
+                </div>
+              </div>
+            </div>
+            <button 
+              className="btn btn-secondary btn-sm"
+              onClick={() => onNavigateToTab('tickets')}
+              style={{ fontSize: '0.82rem', padding: '7px 12px', fontWeight: 700 }}
+            >
+              Fiş Listesinde Gör
+            </button>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '10px' }}>
+            {onWayTickets.map(ow => (
+              <div 
+                key={ow.id}
+                style={{
+                  background: 'var(--bg-card)',
+                  border: '1px solid rgba(56, 189, 248, 0.3)',
+                  borderRadius: '12px',
+                  padding: '12px 14px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'space-between',
+                  gap: '8px',
+                  cursor: 'pointer'
+                }}
+                onClick={() => onSelectTicket(ow)}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <strong style={{ fontSize: '0.92rem', color: '#38bdf8' }}>{ow.ticketNumber}</strong>
+                  <span className="badge" style={{ background: 'rgba(14, 165, 233, 0.2)', color: '#38bdf8', fontSize: '0.74rem', fontWeight: 700 }}>
+                    🚗 Yolda
+                  </span>
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.92rem', fontWeight: 700, color: 'var(--text-main)' }}>{ow.customerName}</div>
+                  <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>📍 {ow.customerAddress}</div>
+                  <div style={{ fontSize: '0.82rem', color: 'var(--text-dim)', marginTop: '2px' }}>🔧 {ow.brand} {ow.model}</div>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px dashed var(--border-subtle)', paddingTop: '6px', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                  <span>Usta: <strong style={{ color: 'var(--text-main)' }}>{ow.technicianName || 'Saha Ustası'}</strong></span>
+                  <span style={{ color: '#38bdf8', fontWeight: 600 }}>Detay →</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* 🔔 ONAY BEKLEYEN SAHA TAHSİLATLARI KARTI */}
       {pendingApprovalTickets.length > 0 && (

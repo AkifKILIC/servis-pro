@@ -57,7 +57,11 @@ export const TicketList: React.FC<TicketListProps> = ({
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [deviceFilter, setDeviceFilter] = useState<string>('all');
   const [priorityFilter, setPriorityFilter] = useState<string>('all');
+  const [technicianFilter, setTechnicianFilter] = useState<string>('all');
   const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid');
+
+  // Teknisyenlerin dinamik listesi
+  const availableTechnicians = Array.from(new Set(tickets.map(t => t.technicianName).filter(Boolean))) as string[];
 
   // Yerel Saat Dilimine Göre Bugünün Tarihi (YYYY-MM-DD)
   const todayStr = getLocalDateString();
@@ -103,7 +107,12 @@ export const TicketList: React.FC<TicketListProps> = ({
     // Öncelik filtresi
     const matchesPriority = priorityFilter === 'all' || ticket.priority === priorityFilter;
 
-    return matchesSearch && matchesStatus && matchesDevice && matchesPriority;
+    // Teknisyen filtresi
+    const matchesTechnician = 
+      technicianFilter === 'all' || 
+      (technicianFilter === 'unassigned' ? !ticket.technicianName : ticket.technicianName === technicianFilter);
+
+    return matchesSearch && matchesStatus && matchesDevice && matchesPriority && matchesTechnician;
   });
 
   return (
@@ -268,6 +277,20 @@ export const TicketList: React.FC<TicketListProps> = ({
             <option value="low">Düşük</option>
           </select>
 
+          {/* Technician Filter */}
+          <select 
+            className="form-control" 
+            style={{ width: 'auto', minWidth: '150px' }}
+            value={technicianFilter}
+            onChange={(e) => setTechnicianFilter(e.target.value)}
+          >
+            <option value="all">Tüm Teknisyenler</option>
+            {availableTechnicians.map(tech => (
+              <option key={tech} value={tech}>👤 {tech}</option>
+            ))}
+            <option value="unassigned">⚠️ Atanmamış İşler</option>
+          </select>
+
           {/* View Mode Switcher */}
           <div style={{ display: 'flex', gap: '4px', marginLeft: 'auto' }}>
             <button 
@@ -288,12 +311,49 @@ export const TicketList: React.FC<TicketListProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Hızlı Durum Filtre Çipleri */}
+        <div style={{ display: 'flex', gap: '6px', overflowX: 'auto', marginTop: '14px', paddingTop: '10px', borderTop: '1px solid var(--border-subtle)' }}>
+          {[
+            { id: 'all', label: `Tümü (${baseTickets.length})` },
+            { id: 'on_way', label: `🚗 Yolda (${baseTickets.filter(t => t.status === 'on_way').length})`, color: '#38bdf8' },
+            { id: 'in_repair', label: `🔧 Onarımda (${baseTickets.filter(t => t.status === 'in_repair').length})`, color: '#fbbf24' },
+            { id: 'waiting_parts', label: `📦 Parça Bekliyor (${baseTickets.filter(t => t.status === 'waiting_parts').length})`, color: '#f472b6' },
+            { id: 'scheduled', label: `⏳ Planlandı (${baseTickets.filter(t => t.status === 'scheduled').length})`, color: '#60a5fa' },
+            { id: 'ready', label: `✅ Hazır (${baseTickets.filter(t => t.status === 'ready').length})`, color: '#34d399' },
+          ].map(chip => (
+            <button
+              key={chip.id}
+              type="button"
+              onClick={() => setStatusFilter(chip.id)}
+              style={{
+                fontSize: '0.78rem',
+                fontWeight: statusFilter === chip.id ? 800 : 500,
+                padding: '5px 12px',
+                borderRadius: 'var(--radius-pill)',
+                whiteSpace: 'nowrap',
+                background: statusFilter === chip.id 
+                  ? 'var(--primary)' 
+                  : 'rgba(255, 255, 255, 0.05)',
+                color: statusFilter === chip.id 
+                  ? '#ffffff' 
+                  : (chip.color || 'var(--text-muted)'),
+                border: statusFilter === chip.id 
+                  ? '1px solid var(--primary)' 
+                  : '1px solid var(--border-subtle)',
+                cursor: 'pointer'
+              }}
+            >
+              {chip.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Results Count & Active Filter Indicator */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', fontSize: '0.86rem', color: 'var(--text-muted)' }}>
         <span>Listelenen Fiş Sayısı: <strong>{filteredTickets.length}</strong></span>
-        {(searchTerm || statusFilter !== 'all' || deviceFilter !== 'all' || priorityFilter !== 'all') && (
+        {(searchTerm || statusFilter !== 'all' || deviceFilter !== 'all' || priorityFilter !== 'all' || technicianFilter !== 'all') && (
           <button 
             className="btn btn-secondary btn-sm"
             onClick={() => {
@@ -301,6 +361,7 @@ export const TicketList: React.FC<TicketListProps> = ({
               setStatusFilter('all');
               setDeviceFilter('all');
               setPriorityFilter('all');
+              setTechnicianFilter('all');
             }}
           >
             Filtreleri Temizle
@@ -359,13 +420,20 @@ export const TicketList: React.FC<TicketListProps> = ({
                 </div>
 
                 {/* Device Type Pill & Warranty */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.8rem' }}>
-                  <span className="badge" style={{ background: device.bg, color: device.color }}>
-                    {device.label}
-                  </span>
-                  <span style={{ color: 'var(--text-dim)' }}>
-                    {ticket.warrantyStatus === 'warranty' ? 'Garanti Dahili' : 'Ücretli / Özel Servis'}
-                  </span>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', fontSize: '0.8rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span className="badge" style={{ background: device.bg, color: device.color }}>
+                      {device.label}
+                    </span>
+                    <span style={{ color: 'var(--text-dim)', fontSize: '0.76rem' }}>
+                      {ticket.warrantyStatus === 'warranty' ? 'Garanti Dahili' : 'Özel Servis'}
+                    </span>
+                  </div>
+                  {ticket.technicianName && (
+                    <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', background: 'rgba(255, 255, 255, 0.05)', padding: '2px 6px', borderRadius: '6px' }}>
+                      👤 {ticket.technicianName}
+                    </span>
+                  )}
                 </div>
 
                 {/* Reported Fault */}
@@ -526,6 +594,11 @@ export const TicketList: React.FC<TicketListProps> = ({
                         <span className="badge-dot" />
                         {statusInfo.label}
                       </span>
+                      {ticket.technicianName && (
+                        <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                          👤 {ticket.technicianName}
+                        </div>
+                      )}
                     </td>
                     <td>
                       <span style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>

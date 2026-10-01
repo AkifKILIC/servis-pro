@@ -216,6 +216,7 @@ export const TicketDetailModal: React.FC<TicketDetailModalProps> = ({
   const allStatuses: TicketStatus[] = [
     'pending',
     'scheduled',
+    'on_way',
     'in_repair',
     'waiting_parts',
     'testing',

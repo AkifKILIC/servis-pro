@@ -44,6 +44,7 @@ export const CustomerList: React.FC<CustomerListProps> = ({
     return (
       c.fullName.toLowerCase().includes(term) ||
       c.phone.includes(term) ||
+      (c.neighborhood && c.neighborhood.toLowerCase().includes(term)) ||
       c.district.toLowerCase().includes(term) ||
       c.city.toLowerCase().includes(term) ||
       c.address.toLowerCase().includes(term)
@@ -121,7 +122,7 @@ export const CustomerList: React.FC<CustomerListProps> = ({
                       <div>
                         <strong style={{ fontSize: '0.96rem' }}>{customer.fullName}</strong>
                         <div style={{ fontSize: '0.82rem', color: 'var(--text-dim)' }}>
-                          {customer.district} / {customer.city}
+                          {customer.neighborhood ? `${customer.neighborhood} Mah. • ` : ''}{customer.district} / {customer.city}
                         </div>
                       </div>
                     </div>

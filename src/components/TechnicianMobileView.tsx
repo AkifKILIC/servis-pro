@@ -29,7 +29,10 @@ import {
   Package,
   Monitor,
   LogOut,
-  History
+  History,
+  Search,
+  Sun,
+  Moon
 } from 'lucide-react';
 import { syncService } from '../services/syncService';
 import { ServiceTicket, SparePart, TicketPartItem, TicketStatus, PaymentStatus, PaymentMethod, Priority } from '../types';
@@ -91,6 +94,26 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
   const [deviceStatus, setDeviceStatus] = useState(() => checkNotificationSupport());
   const [soundTested, setSoundTested] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+
+  // Arama & Güneş Modu & Durum Alt Filtresi (UI/UX Geliştirmesi)
+  const [searchQuery, setSearchQuery] = useState('');
+  const [subStatusFilter, setSubStatusFilter] = useState<'all' | 'on_way' | 'in_repair' | 'waiting_parts' | 'scheduled'>('all');
+  const [sunlightMode, setSunlightMode] = useState(() => {
+    if (typeof localStorage !== 'undefined') {
+      return localStorage.getItem('servispro_tech_sunlight') === 'true';
+    }
+    return false;
+  });
+
+  const toggleSunlightMode = () => {
+    setSunlightMode(prev => {
+      const next = !prev;
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('servispro_tech_sunlight', next.toString());
+      }
+      return next;
+    });
+  };
 
   // Saha Elemanı Detaylı İnceleme & İşlem Modalı State'leri
   const [inspectingTicket, setInspectingTicket] = useState<ServiceTicket | null>(null);
@@ -241,12 +264,37 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
   // 4. Acil Servisler (Bugünün acilleri)
   const urgentTickets = todayTickets.filter(t => t.priority === 'urgent');
 
-  // Aktif Sekmeye Göre Gösterilecek Liste
-  const displayedTickets = 
+  // Aktif Sekmeye Göre Temel Liste
+  const baseTickets = 
     filter === 'today' ? todayTickets :
     filter === 'upcoming' ? upcomingTickets :
     filter === 'completed' ? completedTickets :
     urgentTickets;
+
+  // Arama ve Alt Durum Filtresi Uygulanmış Liste
+  const displayedTickets = baseTickets.filter(ticket => {
+    if (subStatusFilter !== 'all') {
+      if (subStatusFilter === 'scheduled') {
+        if (ticket.status !== 'scheduled' && ticket.status !== 'pending') return false;
+      } else if (ticket.status !== subStatusFilter) {
+        return false;
+      }
+    }
+
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase().trim();
+      const matchName = (ticket.customerName || '').toLowerCase().includes(q);
+      const matchPhone = (ticket.customerPhone || '').includes(q);
+      const matchAddress = (ticket.customerAddress || '').toLowerCase().includes(q);
+      const matchNumber = (ticket.ticketNumber || '').toLowerCase().includes(q);
+      const matchBrand = (ticket.brand || '').toLowerCase().includes(q);
+      const matchModel = (ticket.model || '').toLowerCase().includes(q);
+      const matchFault = (ticket.reportedFault || '').toLowerCase().includes(q);
+      return matchName || matchPhone || matchAddress || matchNumber || matchBrand || matchModel || matchFault;
+    }
+
+    return true;
+  });
 
   // Saha Çalışanı "Yola Çıktım / Adrese Gidiyorum" Bilgisi Gönderir (Madde 5)
   const handleSetOnWay = (ticket: ServiceTicket) => {
@@ -907,22 +955,139 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
         </button>
       </div>
 
+      {/* 🔍 HIZLI AKILLI ARAMA & GÜNEŞ MODU & DURUM ÇİPLERİ */}
+      <div style={{ marginBottom: '14px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <div style={{ position: 'relative', flex: 1 }}>
+            <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8', pointerEvents: 'none' }} />
+            <input 
+              type="text"
+              className="form-control"
+              placeholder="Müşteri, adres, sokak, telefon veya arıza ara..."
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              style={{
+                height: '44px',
+                paddingLeft: '38px',
+                paddingRight: searchQuery ? '36px' : '12px',
+                fontSize: '0.88rem',
+                borderRadius: '12px',
+                background: sunlightMode ? '#ffffff' : 'rgba(30, 41, 59, 0.7)',
+                color: sunlightMode ? '#0f172a' : '#f8fafc',
+                border: sunlightMode ? '1px solid #cbd5e1' : '1px solid rgba(255, 255, 255, 0.12)'
+              }}
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                style={{
+                  position: 'absolute',
+                  right: '10px',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  background: 'transparent',
+                  border: 'none',
+                  color: '#94a3b8',
+                  cursor: 'pointer',
+                  padding: '4px'
+                }}
+              >
+                <X size={16} />
+              </button>
+            )}
+          </div>
+
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={toggleSunlightMode}
+            title={sunlightMode ? 'Karanlık Moda Geç' : 'Güneş Işığı Modunu Aç (Açık Tema)'}
+            style={{
+              height: '44px',
+              padding: '0 12px',
+              borderRadius: '12px',
+              background: sunlightMode ? '#f59e0b' : 'rgba(255, 255, 255, 0.08)',
+              color: sunlightMode ? '#ffffff' : '#f59e0b',
+              border: sunlightMode ? 'none' : '1px solid rgba(245, 158, 11, 0.3)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              fontSize: '0.78rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+              flexShrink: 0
+            }}
+          >
+            {sunlightMode ? <Moon size={16} /> : <Sun size={16} />}
+            <span>{sunlightMode ? 'Koyu' : 'Güneş'}</span>
+          </button>
+        </div>
+
+        {/* Hızlı Durum Filtre Çipleri */}
+        <div style={{ display: 'flex', gap: '6px', overflowX: 'auto', paddingBottom: '4px' }}>
+          {[
+            { id: 'all', label: `Tümü (${baseTickets.length})` },
+            { id: 'on_way', label: `🚗 Yolda (${baseTickets.filter(t => t.status === 'on_way').length})` },
+            { id: 'in_repair', label: `🔧 Onarımda (${baseTickets.filter(t => t.status === 'in_repair').length})` },
+            { id: 'waiting_parts', label: `📦 Parça Bekliyor (${baseTickets.filter(t => t.status === 'waiting_parts').length})` },
+            { id: 'scheduled', label: `⏳ Beklemede (${baseTickets.filter(t => t.status === 'scheduled' || t.status === 'pending').length})` },
+          ].map(chip => (
+            <button
+              key={chip.id}
+              type="button"
+              onClick={() => setSubStatusFilter(chip.id as any)}
+              style={{
+                fontSize: '0.75rem',
+                fontWeight: subStatusFilter === chip.id ? 800 : 500,
+                padding: '6px 12px',
+                borderRadius: '10px',
+                whiteSpace: 'nowrap',
+                background: subStatusFilter === chip.id 
+                  ? 'var(--primary)' 
+                  : (sunlightMode ? '#e2e8f0' : 'rgba(255, 255, 255, 0.06)'),
+                color: subStatusFilter === chip.id 
+                  ? '#ffffff' 
+                  : (sunlightMode ? '#1e293b' : '#94a3b8'),
+                border: 'none',
+                cursor: 'pointer'
+              }}
+            >
+              {chip.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* Tickets List for Technician */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
         {displayedTickets.length === 0 ? (
           <div className="card" style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-muted)' }}>
             <CheckCircle2 size={44} color="var(--emerald)" style={{ marginBottom: '8px' }} />
             <h4>
-              {filter === 'today' ? 'Bugüne Ait Bekleyen Saha İşi Yok' :
+              {searchQuery ? `"${searchQuery}" ile eşleşen servis bulunamadı` :
+               subStatusFilter !== 'all' ? 'Bu aşamada fiş bulunmuyor' :
+               filter === 'today' ? 'Bugüne Ait Bekleyen Saha İşi Yok' :
                filter === 'upcoming' ? 'İleri Tarihe Alınmış Randevu Yok' :
                filter === 'completed' ? 'Henüz Tamamlanan Fiş Bulunmuyor' :
                'Acil Çağrı Yok'}
             </h4>
             <p style={{ fontSize: '0.85rem' }}>
-              {filter === 'today' ? 'Tüm bugünkü servisler tamamlandı veya yeni iş bekleniyor.' :
+              {searchQuery ? 'Farklı bir arama terimi deneyebilir veya filtreyi temizleyebilirsiniz.' :
+               filter === 'today' ? 'Tüm bugünkü servisler tamamlandı veya yeni iş bekleniyor.' :
                filter === 'upcoming' ? 'İleri tarihe randevu verildiğinde burada listelenir ve o gün geldiğinde otomatik bugünün işlerine düşer.' :
                'Yeni kayıtlar otomatik olarak ekranda belirecektir.'}
             </p>
+            {searchQuery && (
+              <button 
+                type="button" 
+                className="btn btn-secondary btn-sm" 
+                onClick={() => setSearchQuery('')}
+                style={{ marginTop: '8px' }}
+              >
+                Aramayı Temizle
+              </button>
+            )}
           </div>
         ) : (
           displayedTickets.map(ticket => {
@@ -941,8 +1106,10 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
                   display: 'flex',
                   flexDirection: 'column',
                   gap: '14px',
-                  background: 'var(--bg-elevated)',
-                  boxShadow: 'var(--shadow-md)',
+                  background: sunlightMode ? '#ffffff' : 'var(--bg-elevated)',
+                  color: sunlightMode ? '#0f172a' : 'var(--text-main)',
+                  border: sunlightMode ? '1px solid #cbd5e1' : undefined,
+                  boxShadow: sunlightMode ? '0 4px 14px rgba(0, 0, 0, 0.08)' : 'var(--shadow-md)',
                   borderRadius: 'var(--radius-md)'
                 }}
               >
@@ -983,38 +1150,48 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
 
                 {/* Device & Brand */}
                 <div>
-                  <div style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <div style={{ fontSize: '1.15rem', fontWeight: 800, color: sunlightMode ? '#0f172a' : 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <span>{ticket.brand}</span>
                     <span>{ticket.model}</span>
                   </div>
-                  <div style={{ fontSize: '0.84rem', color: 'var(--text-dim)', marginTop: '2px' }}>
+                  <div style={{ fontSize: '0.84rem', color: sunlightMode ? '#475569' : 'var(--text-dim)', marginTop: '2px' }}>
                     {device.label} {ticket.serialNumber ? `• Seri No: ${ticket.serialNumber}` : ''}
                   </div>
                 </div>
 
                 {/* Customer Fault / Complaint */}
-                <div style={{ background: 'rgba(255, 255, 255, 0.03)', padding: '10px 12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
-                  <div style={{ fontSize: '0.78rem', color: 'var(--amber)', fontWeight: 700, marginBottom: '2px' }}>
+                <div style={{ 
+                  background: sunlightMode ? '#f8fafc' : 'rgba(255, 255, 255, 0.03)', 
+                  padding: '10px 12px', 
+                  borderRadius: 'var(--radius-sm)', 
+                  border: sunlightMode ? '1px solid #e2e8f0' : '1px solid var(--border-subtle)' 
+                }}>
+                  <div style={{ fontSize: '0.78rem', color: sunlightMode ? '#b45309' : 'var(--amber)', fontWeight: 800, marginBottom: '2px' }}>
                     ⚠️ BİLDİRİLEN ARIZA:
                   </div>
-                  <div style={{ fontSize: '0.88rem', color: 'var(--text-main)', fontWeight: 500 }}>
+                  <div style={{ fontSize: '0.88rem', color: sunlightMode ? '#1e293b' : 'var(--text-main)', fontWeight: 600 }}>
                     {ticket.reportedFault}
                   </div>
                   {ticket.technicianDiagnosis && (
-                    <div style={{ marginTop: '6px', paddingTop: '6px', borderTop: '1px dashed var(--border-subtle)', fontSize: '0.82rem', color: 'var(--primary)' }}>
+                    <div style={{ marginTop: '6px', paddingTop: '6px', borderTop: sunlightMode ? '1px dashed #cbd5e1' : '1px dashed var(--border-subtle)', fontSize: '0.82rem', color: sunlightMode ? '#2563eb' : 'var(--primary)' }}>
                       <strong>Usta Teşhisi:</strong> {ticket.technicianDiagnosis}
                     </div>
                   )}
                 </div>
 
                 {/* Customer Information & Quick Action Touch Targets */}
-                <div style={{ background: 'rgba(59, 130, 246, 0.04)', padding: '12px', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(59, 130, 246, 0.15)' }}>
+                <div style={{ 
+                  background: sunlightMode ? '#f0f9ff' : 'rgba(59, 130, 246, 0.04)', 
+                  padding: '12px', 
+                  borderRadius: 'var(--radius-sm)', 
+                  border: sunlightMode ? '1px solid #bae6fd' : '1px solid rgba(59, 130, 246, 0.15)' 
+                }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
                     <div>
-                      <div style={{ fontWeight: 800, fontSize: '1rem', color: 'var(--text-main)' }}>
+                      <div style={{ fontWeight: 800, fontSize: '1rem', color: sunlightMode ? '#0f172a' : 'var(--text-main)' }}>
                         👤 {ticket.customerName}
                       </div>
-                      <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
+                      <div style={{ fontSize: '0.84rem', color: sunlightMode ? '#334155' : 'var(--text-muted)', fontWeight: 600 }}>
                         📞 {ticket.customerPhone}
                       </div>
                     </div>
@@ -1025,7 +1202,7 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
                     )}
                   </div>
 
-                  <div style={{ fontSize: '0.84rem', color: 'var(--text-dim)', marginBottom: '12px', display: 'flex', alignItems: 'flex-start', gap: '6px' }}>
+                  <div style={{ fontSize: '0.84rem', color: sunlightMode ? '#334155' : 'var(--text-dim)', marginBottom: '12px', display: 'flex', alignItems: 'flex-start', gap: '6px', fontWeight: 500 }}>
                     <MapPin size={16} color="var(--primary)" style={{ flexShrink: 0, marginTop: '2px' }} />
                     <span>{ticket.customerAddress}</span>
                   </div>
