@@ -57,9 +57,8 @@ class SyncService {
 
 
   constructor() {
-    // Vite proxy üzerinden /api çağrılarını doğrudan arka plana iletir
-    // Electron masaüstü uygulamasında (file:// protokolü) port 3001'e doğrudan bağlanır
-    if (typeof window !== 'undefined' && window.location.protocol === 'file:') {
+    // Electron masaüstü uygulamasında port 3001'e doğrudan bağlanır
+    if (typeof window !== 'undefined' && (window.location.protocol === 'file:' || (window as any).electronAPI?.isElectron || navigator.userAgent.includes('Electron'))) {
       this.serverUrl = 'http://localhost:3001';
     } else {
       this.serverUrl = '';

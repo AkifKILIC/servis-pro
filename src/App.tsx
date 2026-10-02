@@ -27,9 +27,12 @@ import { AccountingView } from './components/AccountingView';
 import { SettingsView } from './components/SettingsView';
 import { TechnicianMobileView } from './components/TechnicianMobileView';
 import { LoginView } from './components/LoginView';
+import { UpdateNotificationModal } from './components/UpdateNotificationModal';
+import { ElectronUpdateInfo } from './types/electron';
 import { registerServiceWorker, showTechnicianJobNotification, playNotificationSound } from './utils/notifications';
 import { AuthUser, getAuthSession, clearAuthSession } from './utils/auth';
 import { generateTechnicianDispatchWhatsAppLink, formatCurrency } from './utils/helpers';
+import { Sparkles } from 'lucide-react';
 
 export const App: React.FC = () => {
   // Aktif Oturum (1 yıl kalıcı çerez)
@@ -49,6 +52,17 @@ export const App: React.FC = () => {
   const [connectionState, setConnectionState] = useState<'online' | 'offline' | 'syncing'>(syncService.getConnectionState());
   const [pendingQueueCount, setPendingQueueCount] = useState<number>(syncService.getOfflineQueueCount());
   const [liveNotification, setLiveNotification] = useState<string | null>(null);
+  const [availableUpdate, setAvailableUpdate] = useState<ElectronUpdateInfo | null>(null);
+  const [showUpdateModal, setShowUpdateModal] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.electronAPI) {
+      const unsub = window.electronAPI.onUpdateAvailable((info) => {
+        setAvailableUpdate(info);
+      });
+      return () => unsub();
+    }
+  }, []);
 
   // Veriler
   const [tickets, setTickets] = useState<ServiceTicket[]>(storage.getTickets());
@@ -1018,6 +1032,52 @@ export const App: React.FC = () => {
         onSubmit={handleSavePart}
         initialPart={partToEdit}
       />
+
+      {/* Floating Desktop Update Notification Banner */}
+      {availableUpdate && !showUpdateModal && (
+        <div
+          style={{
+            position: 'fixed',
+            bottom: '24px',
+            right: '24px',
+            zIndex: 9998,
+            background: 'linear-gradient(135deg, #0e1526, #1e293b)',
+            border: '1px solid rgba(16, 185, 129, 0.4)',
+            boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 0 20px rgba(16, 185, 129, 0.25)',
+            borderRadius: '12px',
+            padding: '12px 16px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px',
+            color: '#f8fafc',
+            maxWidth: '380px'
+          }}
+        >
+          <div style={{ background: 'rgba(16, 185, 129, 0.2)', padding: '8px', borderRadius: '8px', color: '#34d399' }}>
+            <Sparkles size={18} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: '0.82rem', fontWeight: 700 }}>Yeni Güncelleme Mevcut!</div>
+            <div style={{ fontSize: '0.74rem', color: '#94a3b8' }}>ServisPro v{availableUpdate.newVersion} sürümü hazır.</div>
+          </div>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={() => setShowUpdateModal(true)}
+            style={{ padding: '6px 12px', fontSize: '0.76rem', background: 'linear-gradient(135deg, #059669, #10b981)' }}
+          >
+            Yükle
+          </button>
+        </div>
+      )}
+
+      {showUpdateModal && availableUpdate && (
+        <UpdateNotificationModal
+          isOpen={showUpdateModal}
+          updateInfo={availableUpdate}
+          onClose={() => setShowUpdateModal(false)}
+        />
+      )}
     </div>
   );
 };

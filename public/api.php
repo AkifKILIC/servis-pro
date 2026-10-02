@@ -193,6 +193,26 @@ $body = json_decode($rawInput, true) ?: [];
 try {
     switch ($action) {
         // -------------------------------------------------------------
+        // VERSİYON VE GÜNCELLEME METADATA BİLGİSİ
+        // -------------------------------------------------------------
+        case 'version':
+            $versionFile = __DIR__ . '/version.json';
+            if (file_exists($versionFile)) {
+                $vData = json_decode(file_get_contents($versionFile), true);
+                echo json_encode($vData ?: ['version' => '1.0.0']);
+            } else {
+                echo json_encode([
+                    'version' => '1.0.0',
+                    'versionCode' => 10000,
+                    'buildDate' => date('c'),
+                    'bundleUrl' => 'https://izmirimteknik.com/servispro/app-bundle.zip',
+                    'releaseNotes' => 'ServisPro Masaüstü sürümü.'
+                ]);
+            }
+            exit();
+            break;
+
+        // -------------------------------------------------------------
         // 0. CANLI BULUT BİLDİRİM & ANLIK USTA KÖPRÜSÜ (Vercel Yerine Doğrudan cPanel)
         // -------------------------------------------------------------
         case 'cloud_sync':

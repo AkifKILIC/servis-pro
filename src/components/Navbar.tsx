@@ -1,7 +1,9 @@
-import React from 'react';
-import { Menu, PlusCircle, Wrench, Smartphone, Monitor, LogOut, RefreshCw } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Menu, PlusCircle, Wrench, Smartphone, Monitor, LogOut, RefreshCw, Sparkles, Laptop } from 'lucide-react';
 import { ShopSettings } from '../types';
 import { AuthUser } from '../utils/auth';
+import { UpdateNotificationModal } from './UpdateNotificationModal';
+import { ElectronUpdateInfo } from '../types/electron';
 
 interface NavbarProps {
   onToggleMenu: () => void;
@@ -31,6 +33,44 @@ export const Navbar: React.FC<NavbarProps> = ({
   onTriggerSync,
 }) => {
   const isTechMode = activeTab === 'technician';
+  const [desktopVersion, setDesktopVersion] = useState<string | null>(null);
+  const [availableUpdate, setAvailableUpdate] = useState<ElectronUpdateInfo | null>(null);
+  const [showUpdateModal, setShowUpdateModal] = useState<boolean>(false);
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.electronAPI) {
+      window.electronAPI.getVersionInfo().then((info) => {
+        if (info?.version) setDesktopVersion(info.version);
+      }).catch(() => {});
+
+      const unsub = window.electronAPI.onUpdateAvailable((info) => {
+        setAvailableUpdate(info);
+      });
+
+      return () => {
+        unsub();
+      };
+    }
+  }, []);
+
+  const handleManualCheck = async () => {
+    if (!window.electronAPI) return;
+    setIsCheckingUpdate(true);
+    try {
+      const res = await window.electronAPI.checkForUpdates();
+      if (res.hasUpdate) {
+        setAvailableUpdate(res);
+        setShowUpdateModal(true);
+      } else {
+        alert(res.offline ? 'İnternet bağlantısı yok, çevrimdışı moddasınız.' : `Uygulamanız en güncel sürümde (v${res.currentVersion}).`);
+      }
+    } catch (e: any) {
+      alert('Güncelleme kontrolü başarısız: ' + (e?.message || 'Bilinmeyen hata'));
+    } finally {
+      setIsCheckingUpdate(false);
+    }
+  };
 
   return (
     <header 
@@ -159,6 +199,42 @@ export const Navbar: React.FC<NavbarProps> = ({
           <span>{connectionState === 'syncing' ? 'Eşitleniyor...' : 'Yenile'}</span>
           <span style={{ fontSize: '0.62rem', opacity: 0.6, background: 'rgba(255, 255, 255, 0.12)', padding: '1px 4px', borderRadius: '4px' }}>F5</span>
         </button>
+
+        {/* Masaüstü Sürüm & Otomatik Güncelleme Rozeti */}
+        {desktopVersion && (
+          <button
+            type="button"
+            onClick={availableUpdate ? () => setShowUpdateModal(true) : handleManualCheck}
+            disabled={isCheckingUpdate}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '4px 10px',
+              fontSize: '0.74rem',
+              fontWeight: 700,
+              borderRadius: 'var(--radius-pill)',
+              background: availableUpdate 
+                ? 'linear-gradient(135deg, rgba(16, 185, 129, 0.25), rgba(6, 182, 212, 0.25))' 
+                : 'rgba(255, 255, 255, 0.05)',
+              color: availableUpdate ? '#34d399' : '#94a3b8',
+              border: availableUpdate ? '1px solid rgba(16, 185, 129, 0.5)' : '1px solid rgba(255, 255, 255, 0.1)',
+              boxShadow: availableUpdate ? '0 0 12px rgba(16, 185, 129, 0.35)' : 'none',
+              cursor: 'pointer',
+              transition: 'all 0.2s ease',
+            }}
+            title={availableUpdate ? `🚀 Yeni sürüm hazır (v${availableUpdate.newVersion}). Yüklemek için tıklayın.` : `Masaüstü Uygulaması (v${desktopVersion}). Güncellemeleri denetlemek için tıklayın.`}
+          >
+            {availableUpdate ? <Sparkles size={13} color="#34d399" /> : <Laptop size={13} />}
+            <span>
+              {isCheckingUpdate 
+                ? 'Denetleniyor...' 
+                : availableUpdate 
+                ? `Yeni Sürüm (v${availableUpdate.newVersion})` 
+                : `Masaüstü v${desktopVersion}`}
+            </span>
+          </button>
+        )}
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -208,6 +284,15 @@ export const Navbar: React.FC<NavbarProps> = ({
           </button>
         )}
       </div>
+
+      {/* Otomatik Güncelleme Bildirim ve Yükleme Modalı */}
+      {showUpdateModal && availableUpdate && (
+        <UpdateNotificationModal
+          isOpen={showUpdateModal}
+          updateInfo={availableUpdate}
+          onClose={() => setShowUpdateModal(false)}
+        />
+      )}
     </header>
   );
 };

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Settings, 
   Save, 
@@ -14,12 +14,15 @@ import {
   AlertTriangle,
   Database,
   RefreshCw,
-  Server
+  Server,
+  Laptop,
+  Sparkles
 } from 'lucide-react';
 import { ShopSettings } from '../types';
 import { storage } from '../services/storage';
 import { syncService, getMySqlApiUrl } from '../services/syncService';
 import { getLocalDateString } from '../utils/helpers';
+import { ElectronUpdateInfo, ElectronVersionInfo } from '../types/electron';
 
 interface SettingsViewProps {
   settings: ShopSettings;
@@ -34,6 +37,68 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 }) => {
   const [formData, setFormData] = useState<ShopSettings>({ ...settings });
   const [savedSuccess, setSavedSuccess] = useState(false);
+
+  // Masaüstü Electron Güncelleme Durumu
+  const [electronVersion, setElectronVersion] = useState<ElectronVersionInfo | null>(null);
+  const [updateCheckStatus, setUpdateCheckStatus] = useState<string | null>(null);
+  const [availableUpdate, setAvailableUpdate] = useState<ElectronUpdateInfo | null>(null);
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+  const [isApplyingUpdate, setIsApplyingUpdate] = useState(false);
+  const [updatePercent, setUpdatePercent] = useState<number>(0);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.electronAPI) {
+      window.electronAPI.getVersionInfo().then(info => {
+        setElectronVersion(info);
+      }).catch(() => {});
+
+      const unsub = window.electronAPI.onUpdateProgress(p => {
+        setUpdatePercent(p.percent);
+      });
+      return () => unsub();
+    }
+  }, []);
+
+  const handleCheckUpdate = async () => {
+    if (!window.electronAPI) {
+      setUpdateCheckStatus('Web tarayıcısında çalışıyorsunuz. Sayfayı yenileyerek (F5) en güncel sürüme ulaşabilirsiniz.');
+      return;
+    }
+
+    setIsCheckingUpdate(true);
+    setUpdateCheckStatus('Sunucudan güncellemeler denetleniyor...');
+    try {
+      const res = await window.electronAPI.checkForUpdates();
+      if (res.hasUpdate) {
+        setAvailableUpdate(res);
+        setUpdateCheckStatus(`🚀 Yeni sürüm mevcut: v${res.newVersion}`);
+      } else {
+        setAvailableUpdate(null);
+        setUpdateCheckStatus(res.offline ? 'İnternet bağlantısı yok, çevrimdışı moddasınız.' : `✅ Tebrikler, en güncel sürümü kullanıyorsunuz (v${res.currentVersion}).`);
+      }
+    } catch (e: any) {
+      setUpdateCheckStatus('Hata: ' + (e?.message || 'Güncelleme denetimi yapılamadı.'));
+    } finally {
+      setIsCheckingUpdate(false);
+    }
+  };
+
+  const handleInstallUpdate = async () => {
+    if (!window.electronAPI || !availableUpdate) return;
+    setIsApplyingUpdate(true);
+    try {
+      const res = await window.electronAPI.downloadAndInstallUpdate(availableUpdate);
+      if (res.success) {
+        setUpdateCheckStatus('✅ Güncelleme başarıyla tamamlandı! Uygulama yenileniyor...');
+        setTimeout(() => {
+          window.electronAPI?.restartAndApplyUpdate();
+        }, 1200);
+      }
+    } catch (e: any) {
+      setUpdateCheckStatus('Güncelleme hatası: ' + e.message);
+      setIsApplyingUpdate(false);
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -314,6 +379,121 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
         {/* Right Pane: Backup & Factory Reset */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          {/* Masaüstü Uygulama & Otomatik Güncelleme Yönetimi */}
+          <div 
+            className="card" 
+            style={{ 
+              padding: '20px', 
+              borderColor: 'rgba(56, 189, 248, 0.4)', 
+              background: 'linear-gradient(145deg, rgba(14, 165, 233, 0.05), rgba(59, 130, 246, 0.03))',
+              position: 'relative',
+              overflow: 'hidden'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+              <h4 style={{ fontSize: '1.05rem', fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: '8px', color: '#38bdf8' }}>
+                <Laptop size={18} />
+                Masaüstü & Güncelleme
+              </h4>
+              <span 
+                style={{ 
+                  fontSize: '0.72rem', 
+                  padding: '2px 8px', 
+                  borderRadius: 'var(--radius-pill)', 
+                  background: electronVersion ? 'rgba(16, 185, 129, 0.15)' : 'rgba(148, 163, 184, 0.15)',
+                  color: electronVersion ? '#34d399' : '#94a3b8',
+                  fontWeight: 700,
+                  border: '1px solid ' + (electronVersion ? 'rgba(16, 185, 129, 0.3)' : 'rgba(148, 163, 184, 0.2)')
+                }}
+              >
+                {electronVersion ? `Masaüstü (v${electronVersion.version})` : 'Web Tarayıcısı'}
+              </span>
+            </div>
+
+            <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginBottom: '14px', lineHeight: 1.45 }}>
+              Uygulama her açılışta ve arka planda güncellemeleri otomatik denetler. Yeni sürüm çıktığında sisteminiz otomatik olarak en son sürüme güncellenir.
+            </p>
+
+            {updateCheckStatus && (
+              <div style={{
+                padding: '10px 12px',
+                borderRadius: 'var(--radius-sm)',
+                background: updateCheckStatus.includes('başarıyla') || updateCheckStatus.includes('güncel') || updateCheckStatus.includes('mevcut') 
+                  ? 'rgba(16, 185, 129, 0.15)' 
+                  : 'rgba(59, 130, 246, 0.15)',
+                borderColor: updateCheckStatus.includes('başarıyla') || updateCheckStatus.includes('güncel') || updateCheckStatus.includes('mevcut')
+                  ? 'rgba(16, 185, 129, 0.3)' 
+                  : 'rgba(59, 130, 246, 0.3)',
+                color: updateCheckStatus.includes('başarıyla') || updateCheckStatus.includes('güncel') || updateCheckStatus.includes('mevcut')
+                  ? '#34d399' 
+                  : '#60a5fa',
+                fontSize: '0.82rem',
+                marginBottom: '14px',
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                border: '1px solid'
+              }}>
+                <CheckCircle2 size={16} />
+                <span>{updateCheckStatus}</span>
+              </div>
+            )}
+
+            {isApplyingUpdate && (
+              <div style={{ marginBottom: '14px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.74rem', color: '#94a3b8', marginBottom: '4px' }}>
+                  <span>Güncelleme paketi indiriliyor...</span>
+                  <span style={{ fontWeight: 700, color: '#38bdf8' }}>%{updatePercent}</span>
+                </div>
+                <div style={{ width: '100%', height: '6px', background: 'rgba(255, 255, 255, 0.1)', borderRadius: '999px', overflow: 'hidden' }}>
+                  <div style={{ width: `${updatePercent}%`, height: '100%', background: 'linear-gradient(90deg, #38bdf8, #10b981)', transition: 'width 0.2s' }} />
+                </div>
+              </div>
+            )}
+
+            {availableUpdate ? (
+              <button 
+                type="button" 
+                className="btn btn-primary" 
+                style={{ 
+                  width: '100%', 
+                  background: 'linear-gradient(135deg, #059669, #10b981)',
+                  boxShadow: '0 4px 14px rgba(16, 185, 129, 0.35)',
+                  marginBottom: '10px' 
+                }}
+                disabled={isApplyingUpdate}
+                onClick={handleInstallUpdate}
+              >
+                <Sparkles size={16} />
+                <span>{isApplyingUpdate ? 'Güncelleme Yükleniyor...' : `v${availableUpdate.newVersion} Sürümüne Şimdi Güncelle`}</span>
+              </button>
+            ) : (
+              <button 
+                type="button" 
+                className="btn btn-outline" 
+                style={{ 
+                  width: '100%', 
+                  borderColor: 'rgba(56, 189, 248, 0.4)',
+                  color: '#38bdf8',
+                  marginBottom: '10px' 
+                }}
+                disabled={isCheckingUpdate}
+                onClick={handleCheckUpdate}
+              >
+                <RefreshCw size={15} className={isCheckingUpdate ? 'spin-animation' : ''} />
+                <span>{isCheckingUpdate ? 'Denetleniyor...' : 'Güncellemeleri Şimdi Denetle'}</span>
+              </button>
+            )}
+
+            {electronVersion && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: '#64748b', marginTop: '6px' }}>
+                <span>Derleme: {electronVersion.buildDate ? new Date(electronVersion.buildDate).toLocaleDateString('tr-TR') : 'Güncel'}</span>
+                <span>Mod: {electronVersion.isLive ? 'OTA Canlı Paket' : 'Yerel Paket'}</span>
+              </div>
+            )}
+          </div>
+
           {/* Central MySQL Database Card */}
           <div className="card" style={{ padding: '20px', borderColor: 'rgba(59, 130, 246, 0.4)', background: 'rgba(59, 130, 246, 0.03)' }}>
             <h4 style={{ fontSize: '1.05rem', fontWeight: 700, marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--primary)' }}>

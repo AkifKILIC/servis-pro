@@ -1,7 +1,7 @@
 {
   "name": "servispro",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Beyaz Eşya Teknik Servis Yönetim ve Saha Takip Sistemi",
   "author": "ServisPro",
   "main": "electron/main.cjs",
@@ -11,8 +11,14 @@
     "server": "node server.js",
     "electron": "electron .",
     "electron:dev": "electron .",
-    "electron:build": "npm run build && npx @electron/packager . ServisPro --platform=win32 --arch=x64 --out=dist-desktop --overwrite --ignore=\"dist-desktop|dist-electron|cloudflared.exe\"",
+    "electron:build": "npm run build && npm run prepare:update:keep && npx @electron/packager . ServisPro --platform=win32 --arch=x64 --out=dist-desktop --overwrite --ignore=\"dist-desktop|dist-electron|cloudflared.exe\"",
     "build": "tsc -b && vite build",
+    "prepare:update": "node scripts/prepare-update.cjs patch",
+    "prepare:update:keep": "node scripts/prepare-update.cjs keep",
+    "build:update": "npm run build && npm run prepare:update",
+    "deploy": "npm run build:update && powershell -ExecutionPolicy Bypass -File deploy_ftp.ps1",
+    "deploy:keep": "npm run build && npm run prepare:update:keep && powershell -ExecutionPolicy Bypass -File deploy_ftp.ps1",
+    "publish:update": "npm run deploy",
     "lint": "oxlint",
     "preview": "vite preview"
   },
@@ -36,8 +42,10 @@
     }
   },
   "dependencies": {
+    "adm-zip": "^0.6.1",
     "canvas-confetti": "^1.9.4",
     "cors": "^2.8.6",
+    "electron-updater": "^6.8.9",
     "express": "^5.2.1",
     "lucide-react": "^1.47.0",
     "react": "^19.2.8",

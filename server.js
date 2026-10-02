@@ -14,7 +14,7 @@ const PORT = 3001;
 app.use(cors());
 app.use(express.json());
 
-const DB_DIR = path.join(__dirname, 'data');
+const DB_DIR = process.env.SERVISPRO_DATA_DIR || path.join(__dirname, 'data');
 const DB_FILE = path.join(DB_DIR, 'servispro_db.json');
 
 // Klasör ve dosya kontrolü
