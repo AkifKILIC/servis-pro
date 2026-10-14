@@ -157,7 +157,7 @@ export const CustomerList: React.FC<CustomerListProps> = ({
                         <MessageSquare size={13} />
                       </a>
                       <a 
-                        href={generateMapsLink(customer.address, customer.city, customer.district)} 
+                        href={generateMapsLink(customer.address, customer.city, customer.district, customer.neighborhood)} 
                         target="_blank" 
                         rel="noreferrer" 
                         className="btn btn-secondary btn-sm"

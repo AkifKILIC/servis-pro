@@ -89,11 +89,12 @@ export const TicketModal: React.FC<TicketModalProps> = ({
         address: cleanAddress,
       };
 
-      // Fiş üzerinde gösterilecek detaylı adres formatı
+      // Fiş ve harita yol tarifinde sokak/kapı no önde, ilçe ve mahalle en sonda
+      const mahLabel = cleanNeighborhood ? (/mah|mh/i.test(cleanNeighborhood) ? cleanNeighborhood : `${cleanNeighborhood} Mah.`) : '';
       const fullDisplayAddr = [
-        cleanNeighborhood ? `${cleanNeighborhood} Mah.` : '',
         cleanAddress,
-        `(${cleanDistrict})`
+        `(${cleanDistrict})`,
+        mahLabel,
       ].filter(Boolean).join(' ');
 
       customerInfo = {
@@ -105,11 +106,18 @@ export const TicketModal: React.FC<TicketModalProps> = ({
     } else {
       const existing = customers.find(c => c.id === selectedCustomerId);
       if (existing) {
-        const fullDisplayAddr = [
-          existing.neighborhood ? `${existing.neighborhood} Mah.` : '',
-          existing.address,
-          existing.district ? `(${existing.district})` : ''
-        ].filter(Boolean).join(' ');
+        const parts: string[] = [existing.address];
+        const lowerAddr = (existing.address || '').toLowerCase();
+        
+        if (existing.district && !lowerAddr.includes(existing.district.toLowerCase())) {
+          parts.push(`(${existing.district})`);
+        }
+        if (existing.neighborhood && !lowerAddr.includes(existing.neighborhood.toLowerCase().replace(/\s*mah\.?$/i, ''))) {
+          const existMahLabel = /mah|mh/i.test(existing.neighborhood) ? existing.neighborhood : `${existing.neighborhood} Mah.`;
+          parts.push(existMahLabel);
+        }
+
+        const fullDisplayAddr = parts.filter(Boolean).join(' ');
 
         customerInfo = {
           customerId: existing.id,
