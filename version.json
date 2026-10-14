@@ -1,11 +1,11 @@
 {
-  "version": "1.0.2",
-  "versionCode": 10002,
-  "buildDate": "2026-10-14T23:05:43.965Z",
+  "version": "1.0.3",
+  "versionCode": 10003,
+  "buildDate": "2026-10-14T23:13:18.224Z",
   "releaseNotes": "ServisPro Masaüstü otomatik güncelleme desteği, saha ve ofis ergonomisi, anlık MySQL senkronizasyonu.",
   "bundleUrl": "https://izmirimteknik.com/servispro/app-bundle.zip",
-  "bundleHash": "58d722e1d534ed9db99f5f16dfd09d3c16e0ad257069011e23be1baf6ab6a1d8",
-  "bundleSize": 257984,
+  "bundleHash": "1be3ffe9cd6f7b3ead3ee8aab98d8b763cd52083af1a4d6293d2ce72c74913b1",
+  "bundleSize": 258353,
   "minAppVersion": "1.0.0",
   "downloadUrl": "https://izmirimteknik.com/servispro/"
 }

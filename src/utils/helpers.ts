@@ -447,48 +447,108 @@ export const generateWhatsAppLink = (
   return `https://api.whatsapp.com/send?phone=${cleanPhone}&text=${encodeURIComponent(message)}`;
 };
 
-export const reorderAddressForMaps = (address: string): string => {
+export const reorderAddressForMaps = (
+  address: string, 
+  city: string = '', 
+  district: string = '', 
+  neighborhood: string = ''
+): string => {
   if (!address) return '';
-  let trimmed = address.trim();
+  let text = ' ' + address.trim() + ' ';
 
-  // 1. Mahalle en başta ise (Örn: "Akıncılar Mah. 549/2 Sokak No:6-8 (Buca)" veya "AKINCILAR MAH 564 SOK NO:28")
-  const mahallePrefixRegex = /^([a-zA-ZçğıöşüÇĞİÖŞÜ0-9\s'-]+?\s+(?:mahallesi|mahallesi'nde|mah\.|mah|mh\.|mh))(?:\s*[,:;/-]+\s*|\s+)(.*)$/i;
-  const match = trimmed.match(mahallePrefixRegex);
-  if (match) {
-    const neighborhood = match[1].trim();
-    const rest = match[2].trim();
-    if (rest) {
-      trimmed = `${rest} ${neighborhood}`;
-    }
+  // 1. İlçe Tespiti ve Çıkarılması:
+  let detectedDistrict = district || '';
+  const parenDistrictMatch = text.match(/\(([a-zA-ZçğıöşüÇĞİÖŞÜ\s]+)\)/);
+  if (parenDistrictMatch) {
+    if (!detectedDistrict) detectedDistrict = parenDistrictMatch[1].trim();
+    text = text.replace(parenDistrictMatch[0], ' ');
   } else {
-    // Bilinen Buca mahalle adı ile başlıyorsa (Örn: "Akıncılar 549/2 Sokak No:6-8")
-    for (const bMah of BUCA_NEIGHBORHOODS) {
-      const bRegex = new RegExp(`^(${bMah})(?:\\s+(?:mah(?:allesi|\\.|)|mh(?:\\.|)?))?(?:\\s*[,:;/-]+\\s*|\\s+)(.*)$`, 'i');
-      const bMatch = trimmed.match(bRegex);
-      if (bMatch) {
-        const neighborhoodName = bMatch[1].trim();
-        const rest = bMatch[2].trim();
-        if (rest && rest.length > 2) {
-          const mahLabel = /mah|mh/i.test(neighborhoodName) ? neighborhoodName : `${neighborhoodName} Mah.`;
-          trimmed = `${rest} ${mahLabel}`;
-          break;
-        }
+    for (const d of IZMIR_DISTRICTS) {
+      const dRegex = new RegExp(`(?:^|[^a-zA-ZçğıöşüÇĞİÖŞÜ])${d}(?:$|[^a-zA-ZçğıöşüÇĞİÖŞÜ])`, 'i');
+      if (dRegex.test(text)) {
+        if (!detectedDistrict) detectedDistrict = d;
+        text = text.replace(new RegExp(`\\b${d}\\b`, 'gi'), ' ');
+        break;
       }
     }
   }
 
-  // 2. Eğer mahalle (İlçe) parantezinden önce ortada kaldıysa, en sona taşıyalım
-  // Örn: "549/2 Sokak No:6-8 Akıncılar Mah. (Buca)" -> "549/2 Sokak No:6-8 (Buca) Akıncılar Mah."
-  const midMahalleDistrictRegex = /^(.*)\s+([a-zA-ZçğıöşüÇĞİÖŞÜ0-9\s'-]+?\s+(?:mahallesi|mah\.|mah|mh\.|mh))\s+(\([a-zA-ZçğıöşüÇĞİÖŞÜ\s]+\))$/i;
-  const midMatch = trimmed.match(midMahalleDistrictRegex);
-  if (midMatch) {
-    const street = midMatch[1].trim();
-    const mahalle = midMatch[2].trim();
-    const district = midMatch[3].trim();
-    trimmed = `${street} ${district} ${mahalle}`;
+  // 2. Kapı No Tespiti (Örn: NO:6, NO: 6, NO:6-8, KAPI: 6)
+  let kapiNo = '';
+  const kapiPattern = /(?:^|[\s,;])(?:no|kapi\s*no|kapi|numara)\s*[:.]?\s*([0-9]+(?:\s*[-/]\s*[0-9]+)?(?:[a-zA-Z](?![:\w]))?)/i;
+  const kapiMatch = text.match(kapiPattern);
+  if (kapiMatch) {
+    kapiNo = `No:${kapiMatch[1].replace(/\s+/g, '')}`;
+    text = text.replace(kapiMatch[0], ' ');
   }
 
-  return trimmed;
+  // 3. Daire No (ve Kat) Tespiti (Örn: D:6, D: 6, DAİRE:6)
+  let daireNo = '';
+  const dairePattern = /(?:^|[\s,;])(?:daire|d)\s*[:.]?\s*([0-9]+(?:\s*[-/]\s*[0-9]+)?(?:[a-zA-Z](?![:\w]))?)/i;
+  const daireMatch = text.match(dairePattern);
+  if (daireMatch) {
+    daireNo = `D:${daireMatch[1].replace(/\s+/g, '')}`;
+    text = text.replace(daireMatch[0], ' ');
+  }
+
+  // Kat bilgisi (Örn: K:3, KAT: 2)
+  const katPattern = /(?:^|[\s,;])(?:kat|k)\s*[:.]?\s*([0-9]+)/i;
+  const katMatch = text.match(katPattern);
+  if (katMatch) {
+    const katStr = `Kat:${katMatch[1]}`;
+    daireNo = daireNo ? `${daireNo} ${katStr}` : katStr;
+    text = text.replace(katMatch[0], ' ');
+  }
+
+  // 4. Mahalle Tespiti
+  let detectedMahalle = neighborhood ? neighborhood.trim() : '';
+
+  // Tam mahalle kalıbı (Türkçe İ/ı duyarlı): "[Kelime] Mah.", "[Kelime] Mahallesi", "[Kelime] Mah", "[Kelime] Mh."
+  const mahallePattern = /(?:^|[\s,;])([a-zA-ZçğıöşüÇĞİÖŞÜ'-]+(?:\s+[a-zA-ZçğıöşüÇĞİÖŞÜ'-]+)?)\s+(mahalle[sS][iİıI]|mahalle[sS][iİıI]'nde|mah\.|mah|mh\.|mh)(?:$|[\s,.:;/-])/i;
+  const mahMatch = text.match(mahallePattern);
+  if (mahMatch) {
+    let candWords = mahMatch[1].trim().split(/\s+/);
+    const nonMahallePrefixes = /^(sok|sokak|cad|cadde|apt|ap|apartmani|apartman|blok|sit|sitesi|kat|daire|d|k|no)$/i;
+    while (candWords.length > 1 && nonMahallePrefixes.test(candWords[0])) {
+      candWords.shift();
+    }
+    const cleanCandName = candWords.join(' ').trim();
+    if (!nonMahallePrefixes.test(cleanCandName)) {
+      detectedMahalle = `${cleanCandName} ${mahMatch[2]}`.trim();
+      const toRemove = new RegExp(`${cleanCandName}\\s+${mahMatch[2]}`, 'i');
+      text = text.replace(toRemove, ' ');
+    }
+  }
+
+  // Baştaki, sondaki veya aradaki tek başına kalan artık "Mah." / "Mah" / "Mh" kelimelerini temizle
+  text = text.replace(/(?:^|[\s,.:;/-]+)(?:mah(?:alle[sS][iİıI]|\.|)|mh\.?)(?:$|[\s,.:;/-]+)/gi, ' ');
+
+  // 5. Sokak veya Cadde İsmi (ve Apartman/Site adı)
+  let sokakCadde = text
+    .replace(/[(),]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  sokakCadde = sokakCadde.replace(/^[.,:;/-]+|[.,:;/-]+$/g, '').trim();
+
+  // Mahalle sonuna Mah. ekle (eğer Mah/Mahallesi içermiyorsa)
+  if (detectedMahalle && !/mah|mh/i.test(detectedMahalle)) {
+    detectedMahalle = `${detectedMahalle} Mah.`;
+  }
+
+  // KULLANICI ŞABLONU:
+  // [sokak veya cadde ismi], [kapı no], [daire no], [mahalle], [ilçe]
+  const templateParts: string[] = [];
+  if (sokakCadde) templateParts.push(sokakCadde);
+  if (kapiNo) templateParts.push(kapiNo);
+  if (daireNo) templateParts.push(daireNo);
+  if (detectedMahalle) templateParts.push(detectedMahalle);
+  if (detectedDistrict) templateParts.push(detectedDistrict);
+  if (city && !templateParts.some(p => p.toLowerCase().includes(city.toLowerCase()))) {
+    templateParts.push(city);
+  }
+
+  return templateParts.join(', ');
 };
 
 export const generateMapsLink = (
@@ -497,26 +557,8 @@ export const generateMapsLink = (
   district: string = '',
   neighborhood: string = ''
 ): string => {
-  let processedAddr = reorderAddressForMaps(address || '');
-
-  // Ek mahalle parametresi geldiyse ve adreste henüz yoksa en sona ekle
-  if (neighborhood && !processedAddr.toLowerCase().includes(neighborhood.toLowerCase().replace(/\s*mah\.?$/i, ''))) {
-    const mahLabel = /mah|mh/i.test(neighborhood) ? neighborhood : `${neighborhood} Mah.`;
-    processedAddr = `${processedAddr} ${mahLabel}`.trim();
-  }
-
-  // İlçe ve İl bilgisi adreste yoksa ekle
-  const parts = [processedAddr];
-  const addrLower = processedAddr.toLowerCase();
-
-  if (district && !addrLower.includes(district.toLowerCase())) {
-    parts.push(district);
-  }
-  if (city && !addrLower.includes(city.toLowerCase())) {
-    parts.push(city);
-  }
-
-  const query = encodeURIComponent(parts.filter(Boolean).join(', '));
+  const formattedAddress = reorderAddressForMaps(address || '', city, district, neighborhood);
+  const query = encodeURIComponent(formattedAddress);
   return `https://www.google.com/maps/search/?api=1&query=${query}`;
 };
 

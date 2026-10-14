@@ -90,9 +90,10 @@ export const TicketModal: React.FC<TicketModalProps> = ({
       };
 
       // Fiş ve harita yol tarifinde sokak/kapı no önde, ilçe ve mahalle en sonda
+      const sanitizedAddress = cleanAddress.replace(/^\s*(?:mah(?:alle[sS][iİıI]|\.|)|mh\.?)\b[\s,.:;/-]*/i, '').trim();
       const mahLabel = cleanNeighborhood ? (/mah|mh/i.test(cleanNeighborhood) ? cleanNeighborhood : `${cleanNeighborhood} Mah.`) : '';
       const fullDisplayAddr = [
-        cleanAddress,
+        sanitizedAddress,
         `(${cleanDistrict})`,
         mahLabel,
       ].filter(Boolean).join(' ');
