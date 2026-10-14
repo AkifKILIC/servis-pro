@@ -50,7 +50,8 @@ import {
   getLocalDateString,
   isTicketCompleted,
   isUpcomingTicket,
-  isTodayTicket
+  isTodayTicket,
+  isSystemDefaultText
 } from '../utils/helpers';
 import { 
   requestNotificationPermission, 
@@ -202,7 +203,7 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
   const [isServiceFeeModalOpen, setIsServiceFeeModalOpen] = useState(false);
   const [serviceFeeAmount, setServiceFeeAmount] = useState('400');
   const [serviceFeeMethod, setServiceFeeMethod] = useState<'cash' | 'credit_card' | 'bank_transfer'>('cash');
-  const [serviceFeeNote, setServiceFeeNote] = useState('Müşteri onarımı kabul etmedi / Arıza tespit bedeli tahsil edildi.');
+  const [serviceFeeNote, setServiceFeeNote] = useState('');
 
   const [isJobAcceptedModalOpen, setIsJobAcceptedModalOpen] = useState(false);
   const [repairDiagnosis, setRepairDiagnosis] = useState('');
@@ -218,7 +219,7 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
   const [isQuickPayModalOpen, setIsQuickPayModalOpen] = useState(false);
   const [quickPayAmount, setQuickPayAmount] = useState('0');
   const [quickPayMethod, setQuickPayMethod] = useState<PaymentMethod>('cash');
-  const [quickPayNote, setQuickPayNote] = useState('Saha ustası tarafından ücret tahsil edildi.');
+  const [quickPayNote, setQuickPayNote] = useState('');
 
   // Yerel Saat Dilimine Göre Bugünün Tarihi (YYYY-MM-DD)
   const todayStr = getLocalDateString();
@@ -302,7 +303,7 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
       ticketNumber: ticket.ticketNumber,
       customerName: ticket.customerName,
       status: 'on_way',
-      technicianDiagnosis: ticket.technicianDiagnosis || 'Saha ustası adrese gitmek üzere yola çıktı.',
+      technicianDiagnosis: (ticket.technicianDiagnosis && !isSystemDefaultText(ticket.technicianDiagnosis)) ? ticket.technicianDiagnosis : undefined,
       updatedAt: new Date().toISOString()
     });
 
@@ -316,7 +317,7 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
       ticketNumber: ticket.ticketNumber,
       customerName: ticket.customerName,
       status: 'in_repair',
-      technicianDiagnosis: ticket.technicianDiagnosis || 'Usta adrese ulaştı, arıza incelemesine başlandı.',
+      technicianDiagnosis: (ticket.technicianDiagnosis && !isSystemDefaultText(ticket.technicianDiagnosis)) ? ticket.technicianDiagnosis : undefined,
       updatedAt: new Date().toISOString()
     });
 
@@ -327,7 +328,8 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
   // Detaylı İnceleme Modalını Aç
   const openInspectionModal = (ticket: ServiceTicket) => {
     setInspectingTicket(ticket);
-    setInspectDiagnosis(ticket.technicianDiagnosis || '');
+    const rawDiag = ticket.technicianDiagnosis || '';
+    setInspectDiagnosis(isSystemDefaultText(rawDiag) ? '' : rawDiag);
     setInspectStatus(ticket.status);
     setInspectLaborCost(ticket.laborCost || 0);
     setInspectTransportCost(ticket.transportCost || 0);
@@ -482,12 +484,13 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
   const handleConfirmServiceFee = () => {
     if (!selectedTicket) return;
     const fee = parseFloat(serviceFeeAmount) || 0;
+    const finalNote = serviceFeeNote.trim() || 'Müşteri onarımı kabul etmedi / Arıza tespit bedeli tahsil edildi.';
 
     onUpdateTicket(selectedTicket.id, {
       ticketNumber: selectedTicket.ticketNumber,
       customerName: selectedTicket.customerName,
       status: 'delivered',
-      technicianDiagnosis: serviceFeeNote.trim(),
+      technicianDiagnosis: finalNote,
       transportCost: fee,
       laborCost: 0,
       partsUsed: [],
@@ -553,6 +556,10 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
   const handleConfirmQuickPay = () => {
     if (!selectedTicket) return;
     const amount = parseFloat(quickPayAmount) || selectedTicket.totalAmount || 0;
+    const defaultQuickNote = 'Onarım tamamlandı, ücret sahada tahsil edildi.';
+    const ticketDiag = selectedTicket.technicianDiagnosis;
+    const existingDiag = (ticketDiag && !isSystemDefaultText(ticketDiag)) ? ticketDiag : '';
+    const finalDiag = quickPayNote.trim() || existingDiag || defaultQuickNote;
 
     onUpdateTicket(selectedTicket.id, {
       ticketNumber: selectedTicket.ticketNumber,
@@ -562,7 +569,7 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
       paidAmount: amount,
       paymentStatus: 'pending_approval',
       paymentMethod: quickPayMethod,
-      technicianDiagnosis: quickPayNote.trim() || selectedTicket.technicianDiagnosis || 'Onarım tamamlandı, ücret sahada tahsil edildi.',
+      technicianDiagnosis: finalDiag,
       completedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
@@ -1356,8 +1363,10 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
                       }}
                       onClick={() => {
                         setSelectedTicket(ticket);
-                        setQuickPayAmount(ticket.totalAmount > 0 ? ticket.totalAmount.toString() : '500');
+                        setQuickPayAmount(ticket.totalAmount > 0 ? ticket.totalAmount.toString() : '');
                         setQuickPayMethod(ticket.paymentMethod || 'cash');
+                        const ticketDiag = ticket.technicianDiagnosis || '';
+                        setQuickPayNote(isSystemDefaultText(ticketDiag) ? '' : ticketDiag);
                         setIsQuickPayModalOpen(true);
                       }}
                     >
@@ -1373,6 +1382,8 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
                       style={{ padding: '10px 6px', fontSize: '0.8rem', justifyContent: 'center' }}
                       onClick={() => {
                         setSelectedTicket(ticket);
+                        setServiceFeeAmount('400');
+                        setServiceFeeNote('');
                         setIsServiceFeeModalOpen(true);
                       }}
                     >
@@ -1386,7 +1397,8 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
                       style={{ padding: '10px 6px', fontSize: '0.8rem', justifyContent: 'center' }}
                       onClick={() => {
                         setSelectedTicket(ticket);
-                        setRepairDiagnosis(ticket.technicianDiagnosis || '');
+                        const rawDiag = ticket.technicianDiagnosis || '';
+                        setRepairDiagnosis(isSystemDefaultText(rawDiag) ? '' : rawDiag);
                         setRepairPartName('');
                         setRepairPartPrice('0');
                         const defaultLabor = ticket.laborCost ? ticket.laborCost.toString() : '600';
@@ -1589,12 +1601,24 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
                   placeholder="Yapılan onarım, tespit edilen arıza ve teknik açıklamayı buraya yazınız..."
                   value={inspectDiagnosis}
                   onChange={e => setInspectDiagnosis(e.target.value)}
+                  onFocus={e => {
+                    if (isSystemDefaultText(inspectDiagnosis)) {
+                      setInspectDiagnosis('');
+                    } else {
+                      e.target.select();
+                    }
+                  }}
+                  onClick={e => {
+                    if (isSystemDefaultText(inspectDiagnosis)) {
+                      setInspectDiagnosis('');
+                    }
+                  }}
                 />
               </div>
 
               {/* 5. KULLANILAN YEDEK PARÇALAR */}
               <div className="card" style={{ padding: '14px', borderRadius: '14px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                <div style={{ display: 'flex', borderBottom: 'none', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                   <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--primary)', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <Package size={15} />
                     <span>YEDEK PARÇALAR ({inspectParts.length})</span>
@@ -1690,6 +1714,8 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
                           placeholder="Örn: Kazan Körük Lastiği"
                           value={customPartName}
                           onChange={e => setCustomPartName(e.target.value)}
+                          onFocus={e => e.target.select()}
+                          onClick={e => e.currentTarget.select()}
                         />
                       </div>
                     )}
@@ -1700,8 +1726,14 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
                         type="number" 
                         className="form-control" 
                         style={{ height: '42px', fontSize: '0.95rem' }}
-                        value={partPrice}
-                        onChange={e => setPartPrice(parseFloat(e.target.value) || 0)}
+                        placeholder="0"
+                        value={partPrice === 0 ? '' : partPrice}
+                        onChange={e => setPartPrice(e.target.value === '' ? 0 : parseFloat(e.target.value) || 0)}
+                        onFocus={e => {
+                          if (partPrice === 0) setPartPrice(0);
+                          e.target.select();
+                        }}
+                        onClick={e => e.currentTarget.select()}
                       />
                     </div>
 
@@ -1712,8 +1744,11 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
                         min={1}
                         className="form-control" 
                         style={{ height: '42px', fontSize: '0.95rem' }}
-                        value={partQty}
-                        onChange={e => setPartQty(parseInt(e.target.value, 10) || 1)}
+                        placeholder="1"
+                        value={partQty === 0 ? '' : partQty}
+                        onChange={e => setPartQty(e.target.value === '' ? 1 : parseInt(e.target.value, 10) || 1)}
+                        onFocus={e => e.target.select()}
+                        onClick={e => e.currentTarget.select()}
                       />
                     </div>
 
@@ -1744,8 +1779,14 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
                       type="number" 
                       className="form-control" 
                       style={{ height: '44px', fontSize: '1rem', fontWeight: 700 }}
-                      value={inspectLaborCost}
-                      onChange={e => setInspectLaborCost(parseFloat(e.target.value) || 0)}
+                      placeholder="0"
+                      value={inspectLaborCost === 0 ? '' : inspectLaborCost}
+                      onChange={e => setInspectLaborCost(e.target.value === '' ? 0 : parseFloat(e.target.value) || 0)}
+                      onFocus={e => {
+                        if (inspectLaborCost === 0) setInspectLaborCost(0);
+                        e.target.select();
+                      }}
+                      onClick={e => e.currentTarget.select()}
                     />
                   </div>
 
@@ -1755,8 +1796,14 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
                       type="number" 
                       className="form-control" 
                       style={{ height: '44px', fontSize: '1rem', fontWeight: 700 }}
-                      value={inspectTransportCost}
-                      onChange={e => setInspectTransportCost(parseFloat(e.target.value) || 0)}
+                      placeholder="0"
+                      value={inspectTransportCost === 0 ? '' : inspectTransportCost}
+                      onChange={e => setInspectTransportCost(e.target.value === '' ? 0 : parseFloat(e.target.value) || 0)}
+                      onFocus={e => {
+                        if (inspectTransportCost === 0) setInspectTransportCost(0);
+                        e.target.select();
+                      }}
+                      onClick={e => e.currentTarget.select()}
                     />
                   </div>
 
@@ -1766,8 +1813,14 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
                       type="number" 
                       className="form-control" 
                       style={{ height: '44px', fontSize: '1rem', fontWeight: 700 }}
-                      value={inspectDiscount}
-                      onChange={e => setInspectDiscount(parseFloat(e.target.value) || 0)}
+                      placeholder="0"
+                      value={inspectDiscount === 0 ? '' : inspectDiscount}
+                      onChange={e => setInspectDiscount(e.target.value === '' ? 0 : parseFloat(e.target.value) || 0)}
+                      onFocus={e => {
+                        if (inspectDiscount === 0) setInspectDiscount(0);
+                        e.target.select();
+                      }}
+                      onClick={e => e.currentTarget.select()}
                     />
                   </div>
 
@@ -2068,8 +2121,17 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
                   type="number" 
                   className="form-control" 
                   style={{ fontSize: '1.25rem', fontWeight: 800, height: '46px', borderRadius: '10px' }}
-                  value={serviceFeeAmount}
+                  placeholder="0"
+                  value={serviceFeeAmount === '0' || serviceFeeAmount === '' ? '' : serviceFeeAmount}
                   onChange={e => setServiceFeeAmount(e.target.value)}
+                  onFocus={e => {
+                    if (serviceFeeAmount === '0') setServiceFeeAmount('');
+                    else e.target.select();
+                  }}
+                  onClick={e => {
+                    if (serviceFeeAmount === '0') setServiceFeeAmount('');
+                    else e.currentTarget.select();
+                  }}
                 />
               </div>
 
@@ -2093,8 +2155,23 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
                   type="text" 
                   className="form-control" 
                   style={{ height: '44px', fontSize: '0.9rem', borderRadius: '10px' }}
+                  placeholder="Örn: Müşteri onarımı kabul etmedi / Arıza tespit bedeli tahsil edildi."
                   value={serviceFeeNote}
                   onChange={e => setServiceFeeNote(e.target.value)}
+                  onFocus={e => {
+                    if (isSystemDefaultText(serviceFeeNote)) {
+                      setServiceFeeNote('');
+                    } else {
+                      e.target.select();
+                    }
+                  }}
+                  onClick={e => {
+                    if (isSystemDefaultText(serviceFeeNote)) {
+                      setServiceFeeNote('');
+                    } else {
+                      e.currentTarget.select();
+                    }
+                  }}
                 />
               </div>
             </div>
@@ -2148,6 +2225,18 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
                   placeholder="Örn: Tahliye pompası sargısı yanmış, kazan amortisörleri patlak."
                   value={repairDiagnosis}
                   onChange={e => setRepairDiagnosis(e.target.value)}
+                  onFocus={e => {
+                    if (isSystemDefaultText(repairDiagnosis)) {
+                      setRepairDiagnosis('');
+                    } else {
+                      e.target.select();
+                    }
+                  }}
+                  onClick={e => {
+                    if (isSystemDefaultText(repairDiagnosis)) {
+                      setRepairDiagnosis('');
+                    }
+                  }}
                 />
               </div>
 
@@ -2160,6 +2249,8 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
                   placeholder="Örn: Arçelik Tahliye Pompası"
                   value={repairPartName}
                   onChange={e => setRepairPartName(e.target.value)}
+                  onFocus={e => e.target.select()}
+                  onClick={e => e.currentTarget.select()}
                 />
               </div>
 
@@ -2169,12 +2260,21 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
                   type="number" 
                   className="form-control" 
                   style={{ height: '44px', fontSize: '0.95rem', borderRadius: '10px' }}
-                  value={repairPartPrice}
+                  placeholder="0"
+                  value={repairPartPrice === '0' || repairPartPrice === '' ? '' : repairPartPrice}
                   onChange={e => {
                     const p = e.target.value;
                     setRepairPartPrice(p);
                     const newTotal = (parseFloat(p) || 0) + (parseFloat(repairLaborPrice) || 0);
-                    setJobAcceptedCollectedAmount(newTotal.toString());
+                    setJobAcceptedCollectedAmount(newTotal > 0 ? newTotal.toString() : '');
+                  }}
+                  onFocus={e => {
+                    if (repairPartPrice === '0') setRepairPartPrice('');
+                    else e.target.select();
+                  }}
+                  onClick={e => {
+                    if (repairPartPrice === '0') setRepairPartPrice('');
+                    else e.currentTarget.select();
                   }}
                 />
               </div>
@@ -2185,12 +2285,21 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
                   type="number" 
                   className="form-control" 
                   style={{ height: '44px', fontSize: '0.95rem', borderRadius: '10px' }}
-                  value={repairLaborPrice}
+                  placeholder="0"
+                  value={repairLaborPrice === '0' || repairLaborPrice === '' ? '' : repairLaborPrice}
                   onChange={e => {
                     const l = e.target.value;
                     setRepairLaborPrice(l);
                     const newTotal = (parseFloat(repairPartPrice) || 0) + (parseFloat(l) || 0);
-                    setJobAcceptedCollectedAmount(newTotal.toString());
+                    setJobAcceptedCollectedAmount(newTotal > 0 ? newTotal.toString() : '');
+                  }}
+                  onFocus={e => {
+                    if (repairLaborPrice === '0') setRepairLaborPrice('');
+                    else e.target.select();
+                  }}
+                  onClick={e => {
+                    if (repairLaborPrice === '0') setRepairLaborPrice('');
+                    else e.currentTarget.select();
                   }}
                 />
               </div>
@@ -2263,9 +2372,17 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
                         type="number" 
                         className="form-control"
                         style={{ height: '44px', fontSize: '1.2rem', fontWeight: 800, color: '#10b981', borderRadius: '10px' }}
-                        value={jobAcceptedCollectedAmount}
-                        onChange={e => setJobAcceptedCollectedAmount(e.target.value)}
                         placeholder="0"
+                        value={jobAcceptedCollectedAmount === '0' || jobAcceptedCollectedAmount === '' ? '' : jobAcceptedCollectedAmount}
+                        onChange={e => setJobAcceptedCollectedAmount(e.target.value)}
+                        onFocus={e => {
+                          if (jobAcceptedCollectedAmount === '0') setJobAcceptedCollectedAmount('');
+                          else e.target.select();
+                        }}
+                        onClick={e => {
+                          if (jobAcceptedCollectedAmount === '0') setJobAcceptedCollectedAmount('');
+                          else e.currentTarget.select();
+                        }}
                       />
                     </div>
 
@@ -2379,9 +2496,17 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
                   type="number" 
                   className="form-control" 
                   style={{ height: '48px', fontSize: '1.3rem', fontWeight: 800, color: '#10b981', borderRadius: '10px' }}
-                  value={quickPayAmount}
-                  onChange={e => setQuickPayAmount(e.target.value)}
                   placeholder="0"
+                  value={quickPayAmount === '0' || quickPayAmount === '' ? '' : quickPayAmount}
+                  onChange={e => setQuickPayAmount(e.target.value)}
+                  onFocus={e => {
+                    if (quickPayAmount === '0') setQuickPayAmount('');
+                    else e.target.select();
+                  }}
+                  onClick={e => {
+                    if (quickPayAmount === '0') setQuickPayAmount('');
+                    else e.currentTarget.select();
+                  }}
                 />
               </div>
 
@@ -2408,6 +2533,20 @@ export const TechnicianMobileView: React.FC<TechnicianMobileViewProps> = ({
                   value={quickPayNote}
                   onChange={e => setQuickPayNote(e.target.value)}
                   placeholder="Örn: Cihaz teslim edildi, ücret elden nakit alındı."
+                  onFocus={e => {
+                    if (isSystemDefaultText(quickPayNote)) {
+                      setQuickPayNote('');
+                    } else {
+                      e.target.select();
+                    }
+                  }}
+                  onClick={e => {
+                    if (isSystemDefaultText(quickPayNote)) {
+                      setQuickPayNote('');
+                    } else {
+                      e.currentTarget.select();
+                    }
+                  }}
                 />
               </div>
 

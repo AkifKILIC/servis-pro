@@ -551,6 +551,29 @@ export const reorderAddressForMaps = (
   return templateParts.join(', ');
 };
 
+export const isSystemDefaultText = (text: string | undefined | null): boolean => {
+  if (!text) return false;
+  const trimmed = text.trim().toLowerCase();
+  return (
+    trimmed === '0' ||
+    trimmed.startsWith('saha ustası') ||
+    trimmed.startsWith('usta adrese') ||
+    trimmed.startsWith('usta bu işe') ||
+    trimmed.includes('yola çıktı') ||
+    trimmed.includes('adrese ulaştı') ||
+    trimmed.includes('adrese gitmek üzere') ||
+    trimmed.includes('arıza incelemesine başlandı') ||
+    trimmed.includes('arıza tespit bedeli tahsil edildi') ||
+    trimmed.includes('ücret sahada tahsil edildi') ||
+    trimmed.includes('usta tarafından ücret tahsil edildi') ||
+    trimmed.includes('müşteri onarımı kabul etmedi') ||
+    trimmed.includes('onarıma başlandı') ||
+    trimmed.includes('cihaz test edildi ve ücret tahsil edildi') ||
+    trimmed === 'arıza tespiti yapıldı.' ||
+    trimmed === 'arıza tespiti yapıldı'
+  );
+};
+
 export const generateMapsLink = (
   address: string, 
   city: string = '', 
