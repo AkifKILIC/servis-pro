@@ -1,4 +1,4 @@
-import { DeviceType, TicketStatus, Priority, PaymentStatus, ServiceTicket, CurrentAccount, CurrentAccountTransaction } from '../types';
+import { CurrentAccount, CurrentAccountTransaction, DeviceType, PaymentStatus, Priority, ServiceTicket, TicketStatus } from '../types';
 
 export const formatCurrency = (amount: number): string => {
 
@@ -111,8 +111,8 @@ export const calculateServiceWarranty = (ticket: ServiceTicket): ServiceWarranty
     percentRemaining,
     isExpired,
     statusBadge: {
-      text: isExpired 
-        ? '⚠️ 1 Yıllık Garanti Süresi Doldu' 
+      text: isExpired
+        ? '⚠️ 1 Yıllık Garanti Süresi Doldu'
         : `🛡️ 1 Yıl Garanti Kapsamında (${remainingDays} Gün Kaldı)`,
       color: isExpired ? '#ef4444' : '#10b981',
       bg: isExpired ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)',
@@ -411,8 +411,8 @@ export const cleanPhoneForWhatsApp = (phone: string): string => {
 
 // WhatsApp mesaj linkleri oluşturma
 export const generateWhatsAppLink = (
-  phone: string, 
-  type: 'received' | 'estimate' | 'ready' | 'custom', 
+  phone: string,
+  type: 'received' | 'estimate' | 'ready' | 'custom',
   data: {
     customerName: string;
     ticketNumber: string;
@@ -448,9 +448,9 @@ export const generateWhatsAppLink = (
 };
 
 export const reorderAddressForMaps = (
-  address: string, 
-  city: string = '', 
-  district: string = '', 
+  address: string,
+  city: string = '',
+  district: string = '',
   neighborhood: string = ''
 ): string => {
   if (!address) return '';
@@ -475,28 +475,26 @@ export const reorderAddressForMaps = (
 
   // 2. Kapı No Tespiti (Örn: NO:6, NO: 6, NO:6-8, KAPI: 6)
   let kapiNo = '';
-  const kapiPattern = /(?:^|[\s,;])(?:no|kapi\s*no|kapi|numara)\s*[:.]?\s*([0-9]+(?:\s*[-/]\s*[0-9]+)?(?:[a-zA-Z](?![:\w]))?)/i;
+  const kapiPattern = /(?:^|[\s,;])(?:no|kap[iı]\s*no|kap[iı]|numara)\s*[:.]?\s*([0-9]+(?:\s*[-/]\s*[0-9]+)?(?:[a-zA-Z](?![:\w]))?)/i;
   const kapiMatch = text.match(kapiPattern);
   if (kapiMatch) {
-    kapiNo = `No:${kapiMatch[1].replace(/\s+/g, '')}`;
+    kapiNo = `no: ${kapiMatch[1].replace(/\s+/g, '')}`;
     text = text.replace(kapiMatch[0], ' ');
   }
 
-  // 3. Daire No (ve Kat) Tespiti (Örn: D:6, D: 6, DAİRE:6)
+  // 3. Daire No Tespiti (Örn: D:6, D: 6, DAİRE:6)
   let daireNo = '';
-  const dairePattern = /(?:^|[\s,;])(?:daire|d)\s*[:.]?\s*([0-9]+(?:\s*[-/]\s*[0-9]+)?(?:[a-zA-Z](?![:\w]))?)/i;
+  const dairePattern = /(?:^|[\s,;])(?:daire|da[iİ]re|d)\s*[:.]?\s*([0-9]+(?:\s*[-/]\s*[0-9]+)?(?:[a-zA-Z](?![:\w]))?)/i;
   const daireMatch = text.match(dairePattern);
   if (daireMatch) {
     daireNo = `D:${daireMatch[1].replace(/\s+/g, '')}`;
     text = text.replace(daireMatch[0], ' ');
   }
 
-  // Kat bilgisi (Örn: K:3, KAT: 2)
+  // Kat bilgisi (Örn: K:3, KAT: 2) — haritaya yazılmaz, sadece metinden temizlenir
   const katPattern = /(?:^|[\s,;])(?:kat|k)\s*[:.]?\s*([0-9]+)/i;
   const katMatch = text.match(katPattern);
   if (katMatch) {
-    const katStr = `Kat:${katMatch[1]}`;
-    daireNo = daireNo ? `${daireNo} ${katStr}` : katStr;
     text = text.replace(katMatch[0], ' ');
   }
 
@@ -523,12 +521,41 @@ export const reorderAddressForMaps = (
   // Baştaki, sondaki veya aradaki tek başına kalan artık "Mah." / "Mah" / "Mh" kelimelerini temizle
   text = text.replace(/(?:^|[\s,.:;/-]+)(?:mah(?:alle[sS][iİıI]|\.|)|mh\.?)(?:$|[\s,.:;/-]+)/gi, ' ');
 
-  // 5. Sokak veya Cadde İsmi (ve Apartman/Site adı)
-  let sokakCadde = text
-    .replace(/[(),]/g, ' ')
+  // 5. Sadece Sokak veya Cadde İsmi (Apartman / Site / Blok adları ATILIR)
+  const remaining = text
+    .replace(/[(),;]/g, ' ')
     .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^[.,:;/-]+|[.,:;/-]+$/g, '')
     .trim();
 
+  const tokens = remaining ? remaining.split(' ') : [];
+  const streetKeyword = /^(sokak|soka[gğ][iı]|sok|sk|cadde|caddes[iİı]|cad|cd|bulvar|bulvar[iı]|blv|bul|yolu|meydan[iı]?)\.?$/i;
+  const stopWord = /^(ap|apt|apartman|apartman[iı]|ap\.|apt\.|site|sitesi|sit|sit\.|blok|bl|bl\.|res|residence|plaza|i[sş]han[iı]|han[iı]|mah|mah\.|mh|mh\.|mahallesi)$/i;
+
+  let sokakCadde = '';
+  const keyIdx = tokens.findIndex(t => streetKeyword.test(t));
+  if (keyIdx >= 0) {
+    // Anahtar kelimeden geriye doğru en fazla 4 kelime al, apartman/site kelimesinde dur
+    const parts: string[] = [tokens[keyIdx]];
+    for (let i = keyIdx - 1; i >= 0 && parts.length < 5; i--) {
+      if (stopWord.test(tokens[i])) break;
+      parts.unshift(tokens[i]);
+    }
+    sokakCadde = parts.join(' ');
+  } else {
+    // Sokak anahtar kelimesi yoksa: apartman/site adından önceki kısmı kullan
+    const parts: string[] = [];
+    for (let i = 0; i < tokens.length; i++) {
+      if (stopWord.test(tokens[i])) {
+        // "AKPINAR AP" -> apartman adı olan önceki kelimeyi de at
+        if (/^(ap|apt|apartman|apartman[iı]|ap\.|apt\.|site|sitesi|sit|sit\.|blok|bl|bl\.|res|residence|plaza)$/i.test(tokens[i])) parts.pop();
+        break;
+      }
+      parts.push(tokens[i]);
+    }
+    sokakCadde = parts.join(' ');
+  }
   sokakCadde = sokakCadde.replace(/^[.,:;/-]+|[.,:;/-]+$/g, '').trim();
 
   // Mahalle sonuna Mah. ekle (eğer Mah/Mahallesi içermiyorsa)
@@ -536,17 +563,15 @@ export const reorderAddressForMaps = (
     detectedMahalle = `${detectedMahalle} Mah.`;
   }
 
-  // KULLANICI ŞABLONU:
-  // [sokak veya cadde ismi], [kapı no], [daire no], [mahalle], [ilçe]
+  // KULLANICI ŞABLONU (fazlası yazılmaz, apartman/kat/ilçe/şehir yok):
+  // {sokak veya cadde}, no: {kapı no}, D:{daire no}, {varsa mahalle}
+  void detectedDistrict;
+  void city;
   const templateParts: string[] = [];
   if (sokakCadde) templateParts.push(sokakCadde);
   if (kapiNo) templateParts.push(kapiNo);
   if (daireNo) templateParts.push(daireNo);
   if (detectedMahalle) templateParts.push(detectedMahalle);
-  if (detectedDistrict) templateParts.push(detectedDistrict);
-  if (city && !templateParts.some(p => p.toLowerCase().includes(city.toLowerCase()))) {
-    templateParts.push(city);
-  }
 
   return templateParts.join(', ');
 };
@@ -556,27 +581,23 @@ export const isSystemDefaultText = (text: string | undefined | null): boolean =>
   const trimmed = text.trim().toLowerCase();
   return (
     trimmed === '0' ||
-    trimmed.startsWith('saha ustası') ||
-    trimmed.startsWith('usta adrese') ||
-    trimmed.startsWith('usta bu işe') ||
-    trimmed.includes('yola çıktı') ||
-    trimmed.includes('adrese ulaştı') ||
-    trimmed.includes('adrese gitmek üzere') ||
+    trimmed.startsWith('saha ustası adrese') ||
+    trimmed.startsWith('usta adrese ulaştı') ||
+    trimmed.startsWith('usta bu işe gidiyor') ||
+    trimmed.includes('adrese gitmek üzere yola çıktı') ||
     trimmed.includes('arıza incelemesine başlandı') ||
     trimmed.includes('arıza tespit bedeli tahsil edildi') ||
     trimmed.includes('ücret sahada tahsil edildi') ||
     trimmed.includes('usta tarafından ücret tahsil edildi') ||
     trimmed.includes('müşteri onarımı kabul etmedi') ||
-    trimmed.includes('onarıma başlandı') ||
-    trimmed.includes('cihaz test edildi ve ücret tahsil edildi') ||
     trimmed === 'arıza tespiti yapıldı.' ||
     trimmed === 'arıza tespiti yapıldı'
   );
 };
 
 export const generateMapsLink = (
-  address: string, 
-  city: string = '', 
+  address: string,
+  city: string = '',
   district: string = '',
   neighborhood: string = ''
 ): string => {
@@ -593,9 +614,9 @@ export const generateTechnicianDispatchWhatsAppLink = (
   const cleanPhone = cleanPhoneForWhatsApp(techPhone);
   const device = deviceTypeConfig[ticket.deviceType as DeviceType]?.label || ticket.deviceType;
   const mapsLink = generateMapsLink(ticket.customerAddress, '', '');
-  
+
   const msg = `🚨 *YENİ SERVİS İŞ EMRİ* 🚨\n\n*Fiş No:* ${ticket.ticketNumber}\n*Cihaz:* ${ticket.brand} ${ticket.model} (${device})\n*Müşteri:* ${ticket.customerName}\n*Telefon:* ${ticket.customerPhone}\n*Adres:* ${ticket.customerAddress}\n*Şikayet:* ${ticket.reportedFault}\n*Randevu:* ${ticket.scheduledDate || 'Bugün'} ${ticket.scheduledTimeSlot || ''}\n\n📍 *Harita Yol Tarifi:* ${mapsLink}\n\n*${shopName}*`;
-  
+
   return `https://api.whatsapp.com/send?phone=${cleanPhone}&text=${encodeURIComponent(msg)}`;
 };
 
@@ -606,7 +627,7 @@ export const generateJobCardText = (
 ): string => {
   const device = deviceTypeConfig[ticket.deviceType as DeviceType]?.label || ticket.deviceType;
   const mapsLink = generateMapsLink(ticket.customerAddress, '', '');
-  
+
   return `📢 *YENİ SERVİS İŞİ (${groupName || 'SAHA GRUBU'})* 📢\n\n` +
     `📋 *Fiş No:* ${ticket.ticketNumber}\n` +
     `🔧 *Cihaz:* ${ticket.brand} ${ticket.model} (${device})\n` +
@@ -637,7 +658,7 @@ export const generateCurrentAccountWhatsAppLink = (
 ): string => {
   const cleanPhone = cleanPhoneForWhatsApp(account.phone);
   const isSupplier = account.type === 'supplier';
-  
+
   let balanceText = '';
   if (account.balance > 0) {
     balanceText = `${formatCurrency(account.balance)} (Firmamız Alacaklı)`;
@@ -663,7 +684,7 @@ export const generateCurrentAccountWhatsAppLink = (
     movementsText = '• Henüz kayıtlı işlem hareketi bulunmamaktadır.';
   }
 
-  const msg = 
+  const msg =
     `📋 *${shopName.toUpperCase()} - CARİ HESAP EKSTRESİ* 📋\n\n` +
     `🏢 *Cari Ünvanı:* ${account.name}\n` +
     (account.authorizedPerson ? `👤 *Yetkili:* ${account.authorizedPerson}\n` : '') +
