@@ -810,6 +810,202 @@ textarea.form-control {
   to { transform: scale(1); opacity: 1; }
 }
 
+/* ============================================= */
+/* DÖNEM SEÇİCİ (Gün / Ay / Tarih Aralığı)        */
+/* ============================================= */
+.period-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+.period-selector-modes {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.period-selector--start {
+  align-items: flex-start;
+}
+
+.period-selector--start .period-selector-modes,
+.period-selector--start .period-picker-row {
+  justify-content: flex-start;
+}
+
+.period-segment {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  flex-wrap: wrap;
+}
+
+.period-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: none;
+  border-radius: calc(var(--radius-md) - 3px);
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-fast, 0.15s ease);
+  white-space: nowrap;
+}
+
+.period-chip:hover {
+  color: var(--text-main);
+  background: var(--primary-light);
+}
+
+.period-chip.active {
+  background: linear-gradient(135deg, #2563eb, #3b82f6);
+  color: #ffffff;
+  box-shadow: 0 4px 12px var(--primary-glow);
+}
+
+.period-picker-row {
+  display: flex;
+  justify-content: flex-end;
+  animation: periodSlideIn 0.22s ease;
+}
+
+.period-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.period-step-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 38px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-input);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--transition-fast, 0.15s ease);
+}
+
+.period-step-btn:hover {
+  color: var(--primary);
+  border-color: var(--primary);
+  transform: translateY(-1px);
+}
+
+.period-input {
+  width: auto;
+  min-width: 170px;
+  padding: 8px 12px;
+  color-scheme: dark;
+}
+
+[data-theme="light"] .period-input {
+  color-scheme: light;
+}
+
+.period-range {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.period-range-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.period-range-sep {
+  color: var(--text-dim);
+  padding-bottom: 9px;
+  font-weight: 700;
+}
+
+.period-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.period-label strong {
+  color: var(--text-main);
+}
+
+@keyframes periodSlideIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Excel dışa aktarma butonu */
+.btn-excel {
+  background: linear-gradient(135deg, #047857, #10b981);
+  color: #ffffff;
+  border: none;
+  box-shadow: 0 4px 14px rgba(16, 185, 129, 0.3);
+}
+
+.btn-excel:hover:not(:disabled) {
+  background: linear-gradient(135deg, #065f46, #059669);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(16, 185, 129, 0.4);
+}
+
+.btn-excel:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.excel-option-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+@media (max-width: 900px) {
+  .period-selector,
+  .period-selector-modes,
+  .period-picker-row {
+    align-items: stretch;
+    justify-content: flex-start;
+  }
+  .period-segment {
+    width: 100%;
+  }
+  .period-chip {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+  .period-input {
+    min-width: 0;
+    flex: 1;
+  }
+  .period-stepper {
+    width: 100%;
+  }
+}
+
 /* PRINT MEDIA STYLES (Servis Fişi / Makbuzu) */
 @media print {
   body {

@@ -28,10 +28,66 @@ import {
   ChevronRight,
   ExternalLink,
   Edit2,
-  PieChart
+  PieChart,
+  FileSpreadsheet
 } from 'lucide-react';
 import { CashTransaction, PaymentMethod, CurrentAccount, CurrentAccountTransaction, CurrentAccountType } from '../types';
-import { formatCurrency, formatDate, formatDateOnly, generateCurrentAccountWhatsAppLink } from '../utils/helpers';
+import { formatCurrency, formatDate, formatDateOnly, generateCurrentAccountWhatsAppLink, getLocalDateString } from '../utils/helpers';
+import { PeriodSelection, createDefaultPeriod, resolvePeriod, isInPeriod } from '../utils/period';
+import { downloadXlsx, CellValue, SheetSpec } from '../utils/excelExport';
+import { PeriodSelector } from './PeriodSelector';
+
+// Kasa hesabı etiketleri (Excel çıktısı için)
+const paymentMethodLabel = (m?: string): string => {
+  if (m === 'cash') return 'Nakit Kasa';
+  if (m === 'credit_card') return 'POS / Kart';
+  if (m === 'bank_transfer') return 'Banka Havale';
+  if (m === 'other') return 'Diğer';
+  return '-';
+};
+
+const txTypeLabel = (t: CashTransaction['type']): string =>
+  t === 'income' ? 'Gelir' : t === 'expense' ? 'Gider' : 'Virman';
+
+// Kasa hareketlerini Excel sayfasına dönüştürür (en altta toplam satırı ile)
+const buildCashTransactionsSheet = (list: CashTransaction[], name = 'Kasa Hareketleri'): SheetSpec => {
+  const sorted = [...list].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+  const header: CellValue[] = ['Tarih', 'Tür', 'Kategori', 'Açıklama', 'Kasa / Hesap', 'Hedef Hesap', 'Gelir (₺)', 'Gider (₺)', 'Virman (₺)'].map(h => ({ value: h, style: 'header' as const }));
+  let inc = 0, exp = 0, trf = 0;
+  const rows: CellValue[][] = sorted.map(t => {
+    if (t.type === 'income') inc += t.amount;
+    else if (t.type === 'expense') exp += t.amount;
+    else trf += t.amount;
+    return [
+      new Date(t.date),
+      txTypeLabel(t.type),
+      t.category,
+      t.description,
+      paymentMethodLabel(t.paymentMethod),
+      t.type === 'transfer' ? paymentMethodLabel(t.targetAccountId) : '',
+      t.type === 'income' ? { value: t.amount, style: 'currency' } : null,
+      t.type === 'expense' ? { value: t.amount, style: 'currency' } : null,
+      t.type === 'transfer' ? { value: t.amount, style: 'currency' } : null,
+    ];
+  });
+  rows.push([]);
+  rows.push([
+    { value: 'TOPLAM', style: 'bold' }, `${sorted.length} işlem`, '', '', '', '',
+    { value: inc, style: 'boldCurrency' },
+    { value: exp, style: 'boldCurrency' },
+    { value: trf, style: 'boldCurrency' },
+  ]);
+  rows.push([
+    { value: 'NET (Gelir - Gider)', style: 'bold' }, '', '', '', '', '',
+    { value: inc - exp, style: 'boldCurrency' },
+  ]);
+  return {
+    name,
+    rows: [header, ...rows],
+    headerRowIndex: 0,
+    columnWidths: [18, 10, 24, 48, 16, 16, 15, 15, 15],
+  };
+};
 
 interface AccountingViewProps {
   transactions: CashTransaction[];
@@ -107,7 +163,9 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
   const [movementAlsoCash, setMovementAlsoCash] = useState(true);
 
   // --- KÂR / ZARAR DÖNEM SEÇİMİ ---
-  const [plPeriod, setPlPeriod] = useState<'all' | 'this_month' | 'this_week' | 'today'>('this_month');
+  // Bugün / Bu Hafta / Bu Ay / Tüm Zamanlar + Belirli Gün / Belirli Ay / Özel Tarih Aralığı
+  const [plPeriod, setPlPeriod] = useState<PeriodSelection>(() => createDefaultPeriod('this_month'));
+  const plRange = useMemo(() => resolvePeriod(plPeriod), [plPeriod]);
 
   // ==========================================
   // HESAPLAMALAR & FİNANSAL VERİLER
@@ -211,20 +269,9 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
 
   // Kâr / Zarar Dönem Filtrelemesi
   const plData = useMemo(() => {
-    const now = new Date();
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    const dayOfWeek = now.getDay() || 7;
-    const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek + 1).getTime();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
-
-    const periodTransactions = transactions.filter(t => {
-      if (plPeriod === 'all') return true;
-      const tTime = new Date(t.date).getTime();
-      if (plPeriod === 'today') return tTime >= startOfToday;
-      if (plPeriod === 'this_week') return tTime >= startOfWeek;
-      if (plPeriod === 'this_month') return tTime >= startOfMonth;
-      return true;
-    });
+    const periodTransactions = transactions
+      .filter(t => isInPeriod(t.date, plRange))
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
     const income = periodTransactions
       .filter(t => t.type === 'income')
@@ -251,6 +298,14 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
         expenseCategories[t.category] = (expenseCategories[t.category] || 0) + t.amount;
       });
 
+    // Kategoriye Göre Gelir Dağılımı
+    const incomeCategories: Record<string, number> = {};
+    periodTransactions
+      .filter(t => t.type === 'income')
+      .forEach(t => {
+        incomeCategories[t.category] = (incomeCategories[t.category] || 0) + t.amount;
+      });
+
     return {
       income,
       expense,
@@ -260,9 +315,91 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
       netProfit,
       profitMargin,
       expenseCategories,
+      incomeCategories,
+      transactions: periodTransactions,
       count: periodTransactions.length
     };
-  }, [transactions, plPeriod]);
+  }, [transactions, plRange]);
+
+  // Seçili dönemin Kâr / Zarar raporunu Excel olarak indir
+  const handleExportProfitLoss = () => {
+    const nowStr = formatDate(new Date().toISOString());
+    const margin = plData.income > 0 ? plData.netProfit / plData.income : 0;
+
+    // 1) Özet sayfası
+    const summaryRows: CellValue[][] = [
+      [{ value: `${shopName || 'ServisPro'} – Kâr / Zarar Raporu`, style: 'title' }],
+      [{ value: `Dönem: ${plRange.label}`, style: 'subtitle' }],
+      [{ value: `Oluşturulma: ${nowStr}`, style: 'subtitle' }],
+      [],
+      [{ value: 'Kalem', style: 'header' }, { value: 'Tutar', style: 'header' }, { value: 'Oran', style: 'header' }],
+      ['Toplam Servis & Ciro Geliri', { value: plData.income, style: 'currency' }, null],
+      ['Yedek Parça Maliyeti', { value: plData.partsCost, style: 'currency' }, plData.income > 0 ? { value: plData.partsCost / plData.income, style: 'percent' } : null],
+      [{ value: 'Brüt Hizmet Kârı', style: 'bold' }, { value: plData.grossProfit, style: 'boldCurrency' }, null],
+      ['İşletme & Genel Giderler', { value: plData.operationalExpense, style: 'currency' }, plData.income > 0 ? { value: plData.operationalExpense / plData.income, style: 'percent' } : null],
+      ['Toplam Gider', { value: plData.expense, style: 'currency' }, null],
+      [{ value: 'DÖNEM NET KÂRI', style: 'bold' }, { value: plData.netProfit, style: 'boldCurrency' }, { value: margin, style: 'percent' }],
+      ['İşlem Sayısı', plData.count, null],
+      [],
+      [{ value: 'Gider Kategorisi', style: 'header' }, { value: 'Tutar', style: 'header' }, { value: 'Pay', style: 'header' }],
+      ...(Object.keys(plData.expenseCategories).length === 0
+        ? [['Bu dönemde gider yok']] as CellValue[][]
+        : Object.entries(plData.expenseCategories)
+            .sort((a, b) => b[1] - a[1])
+            .map(([cat, amt]): CellValue[] => [cat, { value: amt, style: 'currency' }, { value: plData.expense > 0 ? amt / plData.expense : 0, style: 'percent' }])),
+      [],
+      [{ value: 'Gelir Kategorisi', style: 'header' }, { value: 'Tutar', style: 'header' }, { value: 'Pay', style: 'header' }],
+      ...(Object.keys(plData.incomeCategories).length === 0
+        ? [['Bu dönemde gelir yok']] as CellValue[][]
+        : Object.entries(plData.incomeCategories)
+            .sort((a, b) => b[1] - a[1])
+            .map(([cat, amt]): CellValue[] => [cat, { value: amt, style: 'currency' }, { value: plData.income > 0 ? amt / plData.income : 0, style: 'percent' }])),
+    ];
+
+    // 2) Günlük kırılım sayfası
+    const daily: Record<string, { income: number; expense: number; count: number }> = {};
+    plData.transactions.forEach(t => {
+      const key = getLocalDateString(new Date(t.date));
+      if (!daily[key]) daily[key] = { income: 0, expense: 0, count: 0 };
+      daily[key].count += 1;
+      if (t.type === 'income') daily[key].income += t.amount;
+      else if (t.type === 'expense') daily[key].expense += t.amount;
+    });
+    const dailyKeys = Object.keys(daily).sort();
+    const dailyRows: CellValue[][] = [
+      ['Tarih', 'Gelir (₺)', 'Gider (₺)', 'Net (₺)', 'İşlem Sayısı'].map(h => ({ value: h, style: 'header' as const })),
+      ...dailyKeys.map((k): CellValue[] => {
+        const [y, m, d] = k.split('-').map(Number);
+        const row = daily[k];
+        return [
+          { value: new Date(y, m - 1, d), style: 'date' },
+          { value: row.income, style: 'currency' },
+          { value: row.expense, style: 'currency' },
+          { value: row.income - row.expense, style: 'currency' },
+          row.count,
+        ];
+      }),
+      [],
+      [
+        { value: 'TOPLAM', style: 'bold' },
+        { value: plData.income, style: 'boldCurrency' },
+        { value: plData.expense, style: 'boldCurrency' },
+        { value: plData.netProfit, style: 'boldCurrency' },
+        { value: plData.count, style: 'bold' },
+      ],
+    ];
+
+    downloadXlsx(`kar_zarar_raporu_${plRange.fileTag}`, [
+      { name: 'Özet', rows: summaryRows, columnWidths: [38, 20, 12] },
+      buildCashTransactionsSheet(plData.transactions),
+      { name: 'Günlük Özet', rows: dailyRows, headerRowIndex: 0, columnWidths: [14, 16, 16, 16, 13] },
+    ]);
+  };
+
+  // Kasa & Banka sekmesinde filtrelenmiş listeyi Excel olarak indir
+  const handleExportCashList = () => {
+    downloadXlsx(`kasa_hareketleri_${getLocalDateString()}`, [buildCashTransactionsSheet(filteredTransactions)]);
+  };
 
   // ==========================================
   // HANDLERS
@@ -455,10 +592,22 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
         </div>
         <div className="header-actions">
           {activeTab === 'cash' && (
-            <button className="btn btn-primary" onClick={() => setIsCashModalOpen(true)}>
-              <Plus size={18} />
-              <span>Yeni Kasa Hareketi Ekle</span>
-            </button>
+            <>
+              <button
+                id="cash-export-excel-btn"
+                className="btn btn-excel"
+                onClick={handleExportCashList}
+                disabled={filteredTransactions.length === 0}
+                title="Listelenen kasa hareketlerini Excel'e aktar"
+              >
+                <FileSpreadsheet size={18} />
+                <span>Excel'e Aktar</span>
+              </button>
+              <button className="btn btn-primary" onClick={() => setIsCashModalOpen(true)}>
+                <Plus size={18} />
+                <span>Yeni Kasa Hareketi Ekle</span>
+              </button>
+            </>
           )}
           {activeTab === 'current' && (
             <button className="btn btn-primary" onClick={() => { setCariToEdit(null); resetCariForm(); setIsCariModalOpen(true); }}>
@@ -1110,38 +1259,23 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
       {activeTab === 'profit_loss' && (
         <div>
           {/* Dönem Filtresi */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
-            <div>
+          <div className="card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px', flexWrap: 'wrap', gap: '16px', padding: '18px 20px' }}>
+            <div style={{ minWidth: '220px' }}>
               <h3 style={{ margin: 0 }}>Dönemsel Kâr & Zarar Raporu</h3>
-              <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-dim)' }}>Hizmet cirosu, parça maliyetleri ve net kârlılık tablosu</p>
+              <p style={{ margin: '2px 0 12px 0', fontSize: '0.85rem', color: 'var(--text-dim)' }}>Hizmet cirosu, parça maliyetleri ve net kârlılık tablosu</p>
+              <button
+                id="pl-export-excel-btn"
+                type="button"
+                className="btn btn-excel btn-sm"
+                onClick={handleExportProfitLoss}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+              >
+                <FileSpreadsheet size={15} />
+                <span>Bu Dönemi Excel'e Aktar ({plData.count} işlem)</span>
+              </button>
             </div>
 
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button 
-                className={`btn btn-sm ${plPeriod === 'today' ? 'btn-primary' : 'btn-secondary'}`}
-                onClick={() => setPlPeriod('today')}
-              >
-                Bugün
-              </button>
-              <button 
-                className={`btn btn-sm ${plPeriod === 'this_week' ? 'btn-primary' : 'btn-secondary'}`}
-                onClick={() => setPlPeriod('this_week')}
-              >
-                Bu Hafta
-              </button>
-              <button 
-                className={`btn btn-sm ${plPeriod === 'this_month' ? 'btn-primary' : 'btn-secondary'}`}
-                onClick={() => setPlPeriod('this_month')}
-              >
-                Bu Ay
-              </button>
-              <button 
-                className={`btn btn-sm ${plPeriod === 'all' ? 'btn-primary' : 'btn-secondary'}`}
-                onClick={() => setPlPeriod('all')}
-              >
-                Tüm Zamanlar
-              </button>
-            </div>
+            <PeriodSelector value={plPeriod} onChange={setPlPeriod} idPrefix="pl-period" />
           </div>
 
           {/* Rapor Kartları */}
@@ -1248,6 +1382,59 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
                 </div>
               </div>
             </div>
+          </div>
+
+          {/* Seçili Dönemin Kasa Hareketleri */}
+          <div className="card" style={{ padding: '20px', marginTop: '20px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '10px', marginBottom: '12px' }}>
+              <h4 style={{ margin: 0, fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Calendar size={16} color="var(--primary)" />
+                Dönem Hareketleri – {plRange.label} ({plData.count})
+              </h4>
+            </div>
+            {plData.transactions.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>
+                Seçilen dönemde kayıtlı kasa hareketi bulunmuyor.
+              </div>
+            ) : (
+              <div className="table-responsive" style={{ maxHeight: '420px', overflowY: 'auto' }}>
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Tarih</th>
+                      <th>Tür</th>
+                      <th>Kategori</th>
+                      <th>Açıklama</th>
+                      <th>Hesap</th>
+                      <th style={{ textAlign: 'right' }}>Tutar</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {plData.transactions.map(tx => {
+                      const isIncome = tx.type === 'income';
+                      const isTransfer = tx.type === 'transfer';
+                      const color = isTransfer ? '#3b82f6' : isIncome ? '#10b981' : '#ef4444';
+                      return (
+                        <tr key={tx.id}>
+                          <td style={{ fontSize: '0.82rem', color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>{formatDate(tx.date)}</td>
+                          <td>
+                            <span className="badge" style={{ background: isTransfer ? 'rgba(59, 130, 246, 0.15)' : isIncome ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)', color }}>
+                              {isTransfer ? 'Virman' : isIncome ? '+ Gelir' : '- Gider'}
+                            </span>
+                          </td>
+                          <td><strong>{tx.category}</strong></td>
+                          <td style={{ maxWidth: '320px' }}>{tx.description}</td>
+                          <td style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>{paymentMethodLabel(tx.paymentMethod)}</td>
+                          <td style={{ textAlign: 'right' }}>
+                            <strong style={{ color }}>{isTransfer ? '' : isIncome ? '+' : '-'}{formatCurrency(tx.amount)}</strong>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
       )}

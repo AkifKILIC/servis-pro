@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Settings, 
   Save, 
@@ -16,27 +16,68 @@ import {
   RefreshCw,
   Server,
   Laptop,
-  Sparkles
+  Sparkles,
+  FileSpreadsheet
 } from 'lucide-react';
-import { ShopSettings } from '../types';
+import { ServiceTicket, ShopSettings } from '../types';
 import { storage } from '../services/storage';
 import { syncService, getMySqlApiUrl } from '../services/syncService';
-import { getLocalDateString } from '../utils/helpers';
+import { getLocalDateString, formatCurrency } from '../utils/helpers';
 import { ElectronUpdateInfo, ElectronVersionInfo } from '../types/electron';
+import { PeriodSelector } from './PeriodSelector';
+import { PeriodSelection, createDefaultPeriod, resolvePeriod } from '../utils/period';
+import {
+  TicketDateBasis,
+  TicketStatusFilter,
+  TICKET_DATE_BASIS_LABELS,
+  TICKET_STATUS_FILTER_LABELS,
+  filterTicketsForExport,
+  exportTicketsToExcel,
+} from '../utils/ticketExport';
 
 interface SettingsViewProps {
   settings: ShopSettings;
+  tickets?: ServiceTicket[];
   onSaveSettings: (newSettings: ShopSettings) => void;
   onResetData: () => void;
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
   settings,
+  tickets,
   onSaveSettings,
   onResetData,
 }) => {
   const [formData, setFormData] = useState<ShopSettings>({ ...settings });
   const [savedSuccess, setSavedSuccess] = useState(false);
+
+  // --- SERVİS KAYITLARINI EXCEL'E AKTARMA ---
+  const [exportPeriod, setExportPeriod] = useState<PeriodSelection>(() => createDefaultPeriod('this_month'));
+  const [exportBasis, setExportBasis] = useState<TicketDateBasis>('createdAt');
+  const [exportStatus, setExportStatus] = useState<TicketStatusFilter>('all');
+  const exportRange = useMemo(() => resolvePeriod(exportPeriod), [exportPeriod]);
+  const exportTickets = useMemo(
+    () => filterTicketsForExport(tickets ?? storage.getTickets(), exportRange, exportBasis, exportStatus),
+    [tickets, exportRange, exportBasis, exportStatus]
+  );
+  const exportTotal = useMemo(
+    () => exportTickets.reduce((s, t) => s + (Number(t.totalAmount) || 0), 0),
+    [exportTickets]
+  );
+
+  const handleExportTickets = () => {
+    if (exportTickets.length === 0) {
+      alert('Seçilen dönem ve filtrede aktarılacak servis kaydı bulunamadı.');
+      return;
+    }
+    exportTicketsToExcel({
+      tickets: exportTickets,
+      range: exportRange,
+      basis: exportBasis,
+      statusFilter: exportStatus,
+      shopName: settings.shopName,
+    });
+  };
 
   // Masaüstü Electron Güncelleme Durumu
   const [electronVersion, setElectronVersion] = useState<ElectronVersionInfo | null>(null);
@@ -242,7 +283,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)', gap: '24px' }}>
-        {/* Settings Form */}
+        {/* Left Pane: Settings Form + Excel Export */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', minWidth: 0 }}>
         <form onSubmit={handleSubmit}>
           <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '20px', padding: '24px' }}>
             <h3 style={{ fontSize: '1.15rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -376,6 +418,95 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </div>
         </form>
+
+          {/* Servis Kayıtlarını Excel'e Aktar */}
+          <div
+            className="card"
+            id="ticket-excel-export-card"
+            style={{
+              padding: '24px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '18px',
+              borderColor: 'rgba(16, 185, 129, 0.35)',
+              background: 'linear-gradient(145deg, rgba(16, 185, 129, 0.06), rgba(14, 165, 233, 0.03))',
+            }}
+          >
+            <div>
+              <h3 style={{ fontSize: '1.15rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px', margin: 0 }}>
+                <FileSpreadsheet size={20} color="#10b981" />
+                Servis Kayıtlarını Excel'e Aktar
+              </h3>
+              <p style={{ fontSize: '0.84rem', color: 'var(--text-muted)', margin: '6px 0 0 0', lineHeight: 1.45 }}>
+                İstediğiniz günü, ayı veya tarih aralığını seçin; servis fişleri, kullanılan parçalar ve özet tabloları tek bir Excel (.xlsx) dosyası olarak indirilsin.
+              </p>
+            </div>
+
+            <div>
+              <label className="form-label" style={{ display: 'block', marginBottom: '8px' }}>Dönem</label>
+              <PeriodSelector value={exportPeriod} onChange={setExportPeriod} idPrefix="ticket-export" align="start" />
+            </div>
+
+            <div className="excel-option-grid">
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label" htmlFor="ticket-export-basis">Tarih Bazı</label>
+                <select
+                  id="ticket-export-basis"
+                  className="form-control"
+                  value={exportBasis}
+                  onChange={e => setExportBasis(e.target.value as TicketDateBasis)}
+                >
+                  {(Object.keys(TICKET_DATE_BASIS_LABELS) as TicketDateBasis[]).map(k => (
+                    <option key={k} value={k}>{TICKET_DATE_BASIS_LABELS[k]}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label" htmlFor="ticket-export-status">Kayıt Durumu</label>
+                <select
+                  id="ticket-export-status"
+                  className="form-control"
+                  value={exportStatus}
+                  onChange={e => setExportStatus(e.target.value as TicketStatusFilter)}
+                >
+                  {(Object.keys(TICKET_STATUS_FILTER_LABELS) as TicketStatusFilter[]).map(k => (
+                    <option key={k} value={k}>{TICKET_STATUS_FILTER_LABELS[k]}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: '12px',
+                flexWrap: 'wrap',
+                padding: '12px 14px',
+                borderRadius: 'var(--radius-sm)',
+                background: 'var(--bg-input)',
+                border: '1px solid var(--border-subtle)',
+              }}
+            >
+              <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                <strong style={{ color: 'var(--text-main)', fontSize: '1.05rem' }}>{exportTickets.length}</strong> servis kaydı
+                {' • '}
+                Toplam: <strong style={{ color: '#10b981' }}>{formatCurrency(exportTotal)}</strong>
+              </div>
+              <button
+                id="ticket-export-excel-btn"
+                type="button"
+                className="btn btn-excel"
+                onClick={handleExportTickets}
+                disabled={exportTickets.length === 0}
+              >
+                <Download size={16} />
+                <span>Excel'e Dök (.xlsx)</span>
+              </button>
+            </div>
+          </div>
+        </div>
 
         {/* Right Pane: Backup & Factory Reset */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>

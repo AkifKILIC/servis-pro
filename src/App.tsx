@@ -937,6 +937,7 @@ export const App: React.FC = () => {
         {activeTab === 'settings' && (
           <SettingsView 
             settings={settings}
+            tickets={tickets}
             onSaveSettings={handleSaveSettings}
             onResetData={handleResetData}
           />
