@@ -11,7 +11,8 @@ import {
 } from 'lucide-react';
 import { storage } from './services/storage';
 import { syncService } from './services/syncService';
-import { ServiceTicket, Customer, SparePart, CashTransaction, ShopSettings, CurrentAccount, CurrentAccountTransaction } from './types';
+import { ServiceTicket, Customer, SparePart, CashTransaction, ShopSettings, CurrentAccount, CurrentAccountTransaction, StaffMember, StaffPayment } from './types';
+import { STAFF_PAYMENT_TYPE_CONFIG } from './utils/staff';
 import { Sidebar } from './components/Sidebar';
 import { Navbar } from './components/Navbar';
 import { Dashboard } from './components/Dashboard';
@@ -33,6 +34,14 @@ import { registerServiceWorker, showTechnicianJobNotification, playNotificationS
 import { AuthUser, getAuthSession, clearAuthSession } from './utils/auth';
 import { generateTechnicianDispatchWhatsAppLink, formatCurrency } from './utils/helpers';
 import { Sparkles } from 'lucide-react';
+
+/** Sunucu listesini esas al, ancak son 10 dakikada yerelde oluşturulup henüz sunucuya ulaşmamış kayıtları koru */
+const mergeWithRecentLocal = <T extends { id: string; createdAt?: string }>(server: T[], local: T[]): T[] => {
+  const serverIds = new Set(server.map(s => s.id));
+  const now = Date.now();
+  const pending = local.filter(l => !serverIds.has(l.id) && l.createdAt && now - new Date(l.createdAt).getTime() < 600000);
+  return [...server, ...pending];
+};
 
 export const App: React.FC = () => {
   // Aktif Oturum (1 yıl kalıcı çerez)
@@ -71,6 +80,8 @@ export const App: React.FC = () => {
   const [transactions, setTransactions] = useState<CashTransaction[]>(storage.getCashTransactions());
   const [currentAccounts, setCurrentAccounts] = useState<CurrentAccount[]>(storage.getCurrentAccounts());
   const [currentTransactions, setCurrentTransactions] = useState<CurrentAccountTransaction[]>(storage.getCurrentTransactions());
+  const [staff, setStaff] = useState<StaffMember[]>(storage.getStaff());
+  const [staffPayments, setStaffPayments] = useState<StaffPayment[]>(storage.getStaffPayments());
   const [settings, setSettings] = useState<ShopSettings>(storage.getSettings());
 
 
@@ -152,6 +163,16 @@ export const App: React.FC = () => {
           setCurrentTransactions(serverData.currentTransactions);
           storage.saveCurrentTransactions(serverData.currentTransactions);
         }
+        if (serverData.staff && Array.isArray(serverData.staff)) {
+          const mergedStaff = mergeWithRecentLocal<StaffMember>(serverData.staff, storage.getStaff());
+          setStaff(mergedStaff);
+          storage.saveStaff(mergedStaff);
+        }
+        if (serverData.staffPayments && Array.isArray(serverData.staffPayments)) {
+          const mergedPayments = mergeWithRecentLocal<StaffPayment>(serverData.staffPayments, storage.getStaffPayments());
+          setStaffPayments(mergedPayments);
+          storage.saveStaffPayments(mergedPayments);
+        }
       } else {
         // Sunucu henüz boşsa yerel veriyi sunucuya gönder
         syncService.pushFullSync({
@@ -161,6 +182,8 @@ export const App: React.FC = () => {
           cash: storage.getCashTransactions(),
           currentAccounts: storage.getCurrentAccounts(),
           currentTransactions: storage.getCurrentTransactions(),
+          staff: storage.getStaff(),
+          staffPayments: storage.getStaffPayments(),
           settings: storage.getSettings(),
         });
       }
@@ -271,6 +294,16 @@ export const App: React.FC = () => {
           setParts(event.data.parts);
           storage.saveParts(event.data.parts);
         }
+        if (event.data?.staff && Array.isArray(event.data.staff)) {
+          const mergedStaff = mergeWithRecentLocal<StaffMember>(event.data.staff, storage.getStaff());
+          setStaff(mergedStaff);
+          storage.saveStaff(mergedStaff);
+        }
+        if (event.data?.staffPayments && Array.isArray(event.data.staffPayments)) {
+          const mergedPayments = mergeWithRecentLocal<StaffPayment>(event.data.staffPayments, storage.getStaffPayments());
+          setStaffPayments(mergedPayments);
+          storage.saveStaffPayments(mergedPayments);
+        }
       }
     });
 
@@ -317,6 +350,10 @@ export const App: React.FC = () => {
     setCustomers(storage.getCustomers());
     setParts(storage.getParts());
     setTransactions(storage.getCashTransactions());
+    setCurrentAccounts(storage.getCurrentAccounts());
+    setCurrentTransactions(storage.getCurrentTransactions());
+    setStaff(storage.getStaff());
+    setStaffPayments(storage.getStaffPayments());
     setSettings(storage.getSettings());
     setLiveNotification(res.success ? '✅ ' + res.message : '⚠️ ' + res.message);
     setTimeout(() => setLiveNotification(null), 4000);
@@ -703,6 +740,77 @@ export const App: React.FC = () => {
     setCurrentTransactions(storage.getCurrentTransactions());
   };
 
+  // Şirket İçi Para Dağıtımı (Ortaklar / Personel / Ustalar)
+  const handleSaveStaff = (data: Omit<StaffMember, 'id' | 'createdAt' | 'updatedAt'>, id?: string) => {
+    const saved = id ? storage.updateStaff(id, data) : storage.addStaff(data);
+    if (saved) {
+      syncService.saveStaffToSql(saved);
+      // İsim değiştiyse geçmiş ödemelerdeki adı da güncelle
+      if (id) {
+        const affected = storage.getStaffPayments().filter(p => p.staffId === id && p.staffName !== saved.name);
+        affected.forEach(p => {
+          const up = storage.updateStaffPayment(p.id, { staffName: saved.name });
+          if (up) syncService.saveStaffPaymentToSql(up);
+        });
+        if (affected.length > 0) setStaffPayments(storage.getStaffPayments());
+      }
+    }
+    setStaff(storage.getStaff());
+  };
+
+  /** Ödemesi olan kişi silinmez, pasife alınır (geçmiş kayıtlar korunur) */
+  const handleDeleteStaff = (id: string): 'deleted' | 'deactivated' => {
+    const hasPayments = storage.getStaffPayments().some(p => p.staffId === id);
+    if (hasPayments) {
+      const updated = storage.updateStaff(id, { active: false });
+      if (updated) syncService.saveStaffToSql(updated);
+      setStaff(storage.getStaff());
+      return 'deactivated';
+    }
+    storage.deleteStaff(id);
+    syncService.deleteStaffFromSql(id);
+    setStaff(storage.getStaff());
+    return 'deleted';
+  };
+
+  const handleAddStaffPayments = (
+    entries: Omit<StaffPayment, 'id' | 'createdAt' | 'relatedCashTxId'>[],
+    alsoCreateCashTx: boolean = true
+  ) => {
+    entries.forEach(entry => {
+      if (!entry.amount || entry.amount <= 0) return;
+      let relatedCashTxId: string | undefined;
+      if (alsoCreateCashTx) {
+        const cfg = STAFF_PAYMENT_TYPE_CONFIG[entry.type];
+        const cashTx = storage.addCashTransaction({
+          type: 'expense',
+          category: cfg.cashCategory,
+          amount: entry.amount,
+          date: entry.date,
+          description: `${entry.staffName} - ${cfg.label}${entry.description ? ' - ' + entry.description : ''}`,
+          paymentMethod: entry.paymentMethod,
+        });
+        relatedCashTxId = cashTx.id;
+        syncService.saveCashToSql(cashTx);
+      }
+      const payment = storage.addStaffPayment({ ...entry, relatedCashTxId });
+      syncService.saveStaffPaymentToSql(payment);
+    });
+    setStaffPayments(storage.getStaffPayments());
+    setTransactions(storage.getCashTransactions());
+  };
+
+  const handleDeleteStaffPayment = (id: string) => {
+    const removed = storage.deleteStaffPayment(id);
+    syncService.deleteStaffPaymentFromSql(id);
+    if (removed?.relatedCashTxId) {
+      storage.deleteCashTransaction(removed.relatedCashTxId);
+      syncService.deleteCashFromSql(removed.relatedCashTxId);
+      setTransactions(storage.getCashTransactions());
+    }
+    setStaffPayments(storage.getStaffPayments());
+  };
+
   // Ayarlar
   const handleSaveSettings = (newSettings: ShopSettings) => {
     storage.saveSettings(newSettings);
@@ -718,6 +826,8 @@ export const App: React.FC = () => {
     setTransactions(storage.getCashTransactions());
     setCurrentAccounts(storage.getCurrentAccounts());
     setCurrentTransactions(storage.getCurrentTransactions());
+    setStaff(storage.getStaff());
+    setStaffPayments(storage.getStaffPayments());
     setSettings(storage.getSettings());
   };
 
@@ -928,6 +1038,12 @@ export const App: React.FC = () => {
             currentTransactions={currentTransactions}
             onAddCurrentTransaction={handleAddCurrentTransaction}
             onDeleteCurrentTransaction={handleDeleteCurrentTransaction}
+            staff={staff}
+            staffPayments={staffPayments}
+            onSaveStaff={handleSaveStaff}
+            onDeleteStaff={handleDeleteStaff}
+            onAddStaffPayments={handleAddStaffPayments}
+            onDeleteStaffPayment={handleDeleteStaffPayment}
             shopName={settings.shopName}
             shopPhone={settings.phone}
           />

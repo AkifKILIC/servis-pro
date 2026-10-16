@@ -161,6 +161,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         tickets: storage.getTickets(),
         parts: storage.getParts(),
         cash: storage.getCashTransactions(),
+        currentAccounts: storage.getCurrentAccounts(),
+        currentTransactions: storage.getCurrentTransactions(),
+        staff: storage.getStaff(),
+        staffPayments: storage.getStaffPayments(),
         settings: storage.getSettings(),
       });
       if (ok) {
@@ -187,6 +191,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         if (data.customers) storage.saveCustomers(data.customers);
         if (data.parts) storage.saveParts(data.parts);
         if (data.cash) storage.saveCashTransactions(data.cash);
+        if (Array.isArray(data.currentAccounts)) storage.saveCurrentAccounts(data.currentAccounts);
+        if (Array.isArray(data.currentTransactions)) storage.saveCurrentTransactions(data.currentTransactions);
+        if (Array.isArray(data.staff)) storage.saveStaff(data.staff);
+        if (Array.isArray(data.staffPayments)) storage.saveStaffPayments(data.staffPayments);
         if (data.settings) storage.saveSettings(data.settings);
         setSqlStatus(`MySQL'den ${data.tickets.length} servis fişi başarıyla yüklendi! Sayfa yenileniyor...`);
         setTimeout(() => window.location.reload(), 1200);

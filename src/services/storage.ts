@@ -7,7 +7,9 @@ import {
   DeviceType, 
   TicketStatus,
   CurrentAccount,
-  CurrentAccountTransaction
+  CurrentAccountTransaction,
+  StaffMember,
+  StaffPayment
 } from '../types';
 
 const STORAGE_KEYS = {
@@ -17,6 +19,8 @@ const STORAGE_KEYS = {
   CASH: 'servispro_cash',
   CURRENT_ACCOUNTS: 'servispro_current_accounts',
   CURRENT_TRANSACTIONS: 'servispro_current_transactions',
+  STAFF: 'servispro_staff_members',
+  STAFF_PAYMENTS: 'servispro_staff_payments',
   SETTINGS: 'servispro_settings',
   THEME: 'servispro_theme',
 };
@@ -796,9 +800,14 @@ class StorageService {
         return existing;
       }
     }
+    let newId = 'tx-' + Date.now() + (tx.type === 'expense' ? '-exp' : '');
+    // Aynı milisaniyede birden fazla kayıt oluşturulursa (toplu dağıtım vb.) ID çakışmasını önle
+    if (txs.some(t => t.id === newId)) {
+      newId += '-' + Math.random().toString(36).slice(2, 7);
+    }
     const newTx: CashTransaction = {
       ...tx,
-      id: 'tx-' + Date.now() + (tx.type === 'expense' ? '-exp' : ''),
+      id: newId,
     };
     txs.unshift(newTx);
     this.saveCashTransactions(txs);
@@ -949,6 +958,85 @@ class StorageService {
     return calculatedBalance;
   }
 
+  // ==========================================
+  // ŞİRKET İÇİ PARA DAĞITIMI (Ortak / Personel / Usta)
+  // ==========================================
+  getStaff(): StaffMember[] {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.STAFF);
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  saveStaff(list: StaffMember[]): void {
+    localStorage.setItem(STORAGE_KEYS.STAFF, JSON.stringify(list));
+  }
+
+  addStaff(data: Omit<StaffMember, 'id' | 'createdAt' | 'updatedAt'>): StaffMember {
+    const list = this.getStaff();
+    const now = new Date().toISOString();
+    const member: StaffMember = { ...data, id: 'staff-' + Date.now(), createdAt: now, updatedAt: now };
+    list.push(member);
+    this.saveStaff(list);
+    return member;
+  }
+
+  updateStaff(id: string, updates: Partial<StaffMember>): StaffMember | null {
+    const list = this.getStaff();
+    const idx = list.findIndex(s => s.id === id);
+    if (idx === -1) return null;
+    list[idx] = { ...list[idx], ...updates, id, updatedAt: new Date().toISOString() };
+    this.saveStaff(list);
+    return list[idx];
+  }
+
+  deleteStaff(id: string): void {
+    this.saveStaff(this.getStaff().filter(s => s.id !== id));
+  }
+
+  getStaffPayments(): StaffPayment[] {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.STAFF_PAYMENTS);
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  saveStaffPayments(list: StaffPayment[]): void {
+    localStorage.setItem(STORAGE_KEYS.STAFF_PAYMENTS, JSON.stringify(list));
+  }
+
+  addStaffPayment(data: Omit<StaffPayment, 'id' | 'createdAt'>): StaffPayment {
+    const list = this.getStaffPayments();
+    const payment: StaffPayment = {
+      ...data,
+      id: 'spay-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7),
+      createdAt: new Date().toISOString(),
+    };
+    list.unshift(payment);
+    this.saveStaffPayments(list);
+    return payment;
+  }
+
+  updateStaffPayment(id: string, updates: Partial<StaffPayment>): StaffPayment | null {
+    const list = this.getStaffPayments();
+    const idx = list.findIndex(p => p.id === id);
+    if (idx === -1) return null;
+    list[idx] = { ...list[idx], ...updates, id };
+    this.saveStaffPayments(list);
+    return list[idx];
+  }
+
+  deleteStaffPayment(id: string): StaffPayment | null {
+    const list = this.getStaffPayments();
+    const target = list.find(p => p.id === id) || null;
+    this.saveStaffPayments(list.filter(p => p.id !== id));
+    return target;
+  }
+
   // Ayarlar
   getSettings(): ShopSettings {
     const raw = localStorage.getItem(STORAGE_KEYS.SETTINGS);
@@ -988,6 +1076,8 @@ class StorageService {
       cash: this.getCashTransactions(),
       currentAccounts: this.getCurrentAccounts(),
       currentTransactions: this.getCurrentTransactions(),
+      staff: this.getStaff(),
+      staffPayments: this.getStaffPayments(),
       settings: this.getSettings(),
     };
     return JSON.stringify(backup, null, 2);
@@ -1002,6 +1092,8 @@ class StorageService {
       if (data.cash) this.saveCashTransactions(data.cash);
       if (data.currentAccounts) this.saveCurrentAccounts(data.currentAccounts);
       if (data.currentTransactions) this.saveCurrentTransactions(data.currentTransactions);
+      if (Array.isArray(data.staff)) this.saveStaff(data.staff);
+      if (Array.isArray(data.staffPayments)) this.saveStaffPayments(data.staffPayments);
       if (data.settings) this.saveSettings(data.settings);
       return true;
     } catch (e) {
@@ -1018,6 +1110,8 @@ class StorageService {
     this.saveCashTransactions(initialCash);
     this.saveCurrentAccounts(initialCurrentAccounts);
     this.saveCurrentTransactions(initialCurrentTransactions);
+    this.saveStaff([]);
+    this.saveStaffPayments([]);
     this.saveSettings(defaultSettings);
   }
 }

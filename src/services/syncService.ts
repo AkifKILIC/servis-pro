@@ -1,4 +1,4 @@
-import { ServiceTicket, Customer, SparePart, CashTransaction, ShopSettings, CurrentAccount, CurrentAccountTransaction } from '../types';
+import { ServiceTicket, Customer, SparePart, CashTransaction, ShopSettings, CurrentAccount, CurrentAccountTransaction, StaffMember, StaffPayment } from '../types';
 import { storage } from './storage';
 
 type SyncCallback = (event: { type: string; data: any }) => void;
@@ -32,7 +32,7 @@ export const getCloudSyncEndpoint = () => {
 
 export interface OfflineMutation {
   id: string;
-  action: 'ticket_save' | 'ticket_delete' | 'customer_save' | 'customer_delete' | 'part_save' | 'part_delete' | 'cash_save' | 'cash_delete' | 'current_account_save' | 'current_account_delete' | 'current_tx_save' | 'current_tx_delete' | 'settings_save';
+  action: 'ticket_save' | 'ticket_delete' | 'customer_save' | 'customer_delete' | 'part_save' | 'part_delete' | 'cash_save' | 'cash_delete' | 'current_account_save' | 'current_account_delete' | 'current_tx_save' | 'current_tx_delete' | 'staff_save' | 'staff_delete' | 'staff_payment_save' | 'staff_payment_delete' | 'settings_save';
   data: any;
   timestamp: number;
 }
@@ -649,6 +649,12 @@ class SyncService {
         if (fresh.currentTransactions && Array.isArray(fresh.currentTransactions)) {
           storage.saveCurrentTransactions(fresh.currentTransactions);
         }
+        if (fresh.staff && Array.isArray(fresh.staff)) {
+          storage.saveStaff(fresh.staff);
+        }
+        if (fresh.staffPayments && Array.isArray(fresh.staffPayments)) {
+          storage.saveStaffPayments(fresh.staffPayments);
+        }
         if (fresh.settings && typeof fresh.settings === 'object') {
           storage.saveSettings(fresh.settings);
         }
@@ -715,6 +721,22 @@ class SyncService {
 
   async deleteCurrentTxFromSql(id: string): Promise<boolean> {
     return this.executeMutation('current_tx_delete', { id }, id);
+  }
+
+  async saveStaffToSql(member: StaffMember): Promise<boolean> {
+    return this.executeMutation('staff_save', member, member.id);
+  }
+
+  async deleteStaffFromSql(id: string): Promise<boolean> {
+    return this.executeMutation('staff_delete', { id }, id);
+  }
+
+  async saveStaffPaymentToSql(payment: StaffPayment): Promise<boolean> {
+    return this.executeMutation('staff_payment_save', payment, payment.id);
+  }
+
+  async deleteStaffPaymentFromSql(id: string): Promise<boolean> {
+    return this.executeMutation('staff_payment_delete', { id }, id);
   }
 
   async saveSettingsToSql(settings: ShopSettings): Promise<boolean> {

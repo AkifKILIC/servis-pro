@@ -159,6 +159,47 @@ export interface CashTransaction {
   targetAccountId?: string;     // Hedef Kasa/Hesap (Virman / Transfer durumunda)
 }
 
+// ============================================================
+// ŞİRKET İÇİ PARA DAĞITIMI (Ortaklar, Personel, Ustalar)
+// ============================================================
+export type StaffRole = 'partner' | 'employee' | 'technician' | 'other';
+
+export interface StaffMember {
+  id: string;
+  name: string;
+  role: StaffRole;                // partner: Ortak, employee: Personel, technician: Usta / Teknisyen
+  phone?: string;
+  sharePercent?: number;          // Ortaklık / kâr payı yüzdesi (%)
+  monthlySalary?: number;         // Aylık sabit maaş (varsa)
+  active: boolean;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type StaffPaymentType =
+  | 'salary'        // Maaş
+  | 'advance'       // Avans
+  | 'bonus'         // Prim / İkramiye
+  | 'commission'    // Komisyon / Hakediş (iş başı)
+  | 'allowance'     // Harçlık / Yemek / Yol
+  | 'profit_share'  // Ortak Kâr Payı (gider değil, kâr dağıtımı)
+  | 'withdrawal'    // Ortak Şahsi Para Çekimi (gider değil, kâr dağıtımı)
+  | 'other';
+
+export interface StaffPayment {
+  id: string;
+  staffId: string;
+  staffName: string;
+  type: StaffPaymentType;
+  amount: number;
+  date: string;
+  paymentMethod: PaymentMethod;
+  description?: string;
+  relatedCashTxId?: string;       // Kasadan düşülen gider kaydı
+  createdAt: string;
+}
+
 export interface ShopSettings {
   shopName: string;
   shopOwner: string;

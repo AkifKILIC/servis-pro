@@ -1,7 +1,7 @@
 <?php
 /**
- * ServisPro Merkezi REST API & MySQL Köprüsü
- * İzmirim Teknik Servis Yönetim Sistemi
+ * ServisPro Merkezi REST API & MySQL KÃ¶prÃ¼sÃ¼
+ * Ä°zmirim Teknik Servis YÃ¶netim Sistemi
  */
 
 header('Access-Control-Allow-Origin: *');
@@ -9,13 +9,13 @@ header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With');
 header('Content-Type: application/json; charset=utf-8');
 
-// Preflight CORS isteği
+// Preflight CORS isteÄŸi
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(200);
     exit();
 }
 
-// 1. Veritabanı Bilgileri
+// 1. VeritabanÄ± Bilgileri
 $db_host = 'localhost';
 $db_name = 'izmirimteknik_servispro_db';
 $db_user = 'izmirimteknik_servispro_user';
@@ -29,11 +29,11 @@ try {
     ]);
 } catch (PDOException $e) {
     http_response_code(500);
-    echo json_encode(['error' => 'Veritabanı bağlantı hatası: ' . $e->getMessage()], JSON_UNESCAPED_UNICODE);
+    echo json_encode(['error' => 'VeritabanÄ± baÄŸlantÄ± hatasÄ±: ' . $e->getMessage()], JSON_UNESCAPED_UNICODE);
     exit();
 }
 
-// Tabloları Otomatik Kontrol Et ve Oluştur (Otomatik Kurulum Garantisi)
+// TablolarÄ± Otomatik Kontrol Et ve OluÅŸtur (Otomatik Kurulum Garantisi)
 function ensureTablesExist($pdo) {
     $sql = "
     CREATE TABLE IF NOT EXISTS `customers` (
@@ -147,13 +147,39 @@ function ensureTablesExist($pdo) {
       `settings_json` LONGTEXT NOT NULL,
       `updatedAt` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+    CREATE TABLE IF NOT EXISTS `staff_members` (
+      `id` VARCHAR(64) NOT NULL PRIMARY KEY,
+      `name` VARCHAR(255) NOT NULL,
+      `role` VARCHAR(30) NOT NULL,
+      `phone` VARCHAR(50) DEFAULT NULL,
+      `sharePercent` DECIMAL(6,2) DEFAULT NULL,
+      `monthlySalary` DECIMAL(12,2) DEFAULT NULL,
+      `active` TINYINT(1) NOT NULL DEFAULT 1,
+      `notes` TEXT DEFAULT NULL,
+      `createdAt` VARCHAR(50) NOT NULL,
+      `updatedAt` VARCHAR(50) NOT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+    CREATE TABLE IF NOT EXISTS `staff_payments` (
+      `id` VARCHAR(64) NOT NULL PRIMARY KEY,
+      `staffId` VARCHAR(64) NOT NULL,
+      `staffName` VARCHAR(255) NOT NULL,
+      `type` VARCHAR(30) NOT NULL,
+      `amount` DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+      `date` VARCHAR(50) NOT NULL,
+      `paymentMethod` VARCHAR(50) NOT NULL,
+      `description` TEXT DEFAULT NULL,
+      `relatedCashTxId` VARCHAR(64) DEFAULT NULL,
+      `createdAt` VARCHAR(50) NOT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     ";
     $pdo->exec($sql);
 }
 
 ensureTablesExist($pdo);
 
-// Benzersiz ve Sıralı Fiş Numarası Garantisi
+// Benzersiz ve SÄ±ralÄ± FiÅŸ NumarasÄ± Garantisi
 function getNextUniqueTicketNumber($pdo, $desiredNumber, $ticketId) {
     if (!empty($desiredNumber)) {
         $stmt = $pdo->prepare("SELECT id FROM tickets WHERE ticketNumber = ? AND id != ?");
@@ -185,7 +211,7 @@ function getNextUniqueTicketNumber($pdo, $desiredNumber, $ticketId) {
     return $prefix . str_pad($maxNum + 1, 4, '0', STR_PAD_LEFT);
 }
 
-// İstek Verisini Al
+// Ä°stek Verisini Al
 $action = $_GET['action'] ?? '';
 $rawInput = file_get_contents('php://input');
 $body = json_decode($rawInput, true) ?: [];
@@ -193,7 +219,7 @@ $body = json_decode($rawInput, true) ?: [];
 try {
     switch ($action) {
         // -------------------------------------------------------------
-        // VERSİYON VE GÜNCELLEME METADATA BİLGİSİ
+        // VERSÄ°YON VE GÃœNCELLEME METADATA BÄ°LGÄ°SÄ°
         // -------------------------------------------------------------
         case 'version':
             $versionFile = __DIR__ . '/version.json';
@@ -206,14 +232,14 @@ try {
                     'versionCode' => 10000,
                     'buildDate' => date('c'),
                     'bundleUrl' => 'https://izmirimteknik.com/servispro/app-bundle.zip',
-                    'releaseNotes' => 'ServisPro Masaüstü sürümü.'
+                    'releaseNotes' => 'ServisPro MasaÃ¼stÃ¼ sÃ¼rÃ¼mÃ¼.'
                 ]);
             }
             exit();
             break;
 
         // -------------------------------------------------------------
-        // 0. CANLI BULUT BİLDİRİM & ANLIK USTA KÖPRÜSÜ (Vercel Yerine Doğrudan cPanel)
+        // 0. CANLI BULUT BÄ°LDÄ°RÄ°M & ANLIK USTA KÃ–PRÃœSÃœ (Vercel Yerine DoÄŸrudan cPanel)
         // -------------------------------------------------------------
         case 'cloud_sync':
             $topic = 'servispro_akifkilic_sync';
@@ -243,14 +269,14 @@ try {
             break;
 
         // -------------------------------------------------------------
-        // 1. TÜM VERİLERİ GETİR (Telefon veya PC açılışında tek sorguda çeker)
+        // 1. TÃœM VERÄ°LERÄ° GETÄ°R (Telefon veya PC aÃ§Ä±lÄ±ÅŸÄ±nda tek sorguda Ã§eker)
         // -------------------------------------------------------------
         case 'data':
-            // Müşteriler
+            // MÃ¼ÅŸteriler
             $custStmt = $pdo->query("SELECT * FROM customers ORDER BY createdAt DESC");
             $customers = $custStmt->fetchAll();
 
-            // Fişler
+            // FiÅŸler
             $ticketStmt = $pdo->query("SELECT * FROM tickets ORDER BY createdAt DESC");
             $rawTickets = $ticketStmt->fetchAll();
             $tickets = array_map(function($t) {
@@ -263,7 +289,7 @@ try {
                 return $t;
             }, $rawTickets);
 
-            // Parçalar
+            // ParÃ§alar
             $partStmt = $pdo->query("SELECT * FROM spare_parts ORDER BY updatedAt DESC");
             $rawParts = $partStmt->fetchAll();
             $parts = array_map(function($p) {
@@ -300,6 +326,22 @@ try {
                 return $ct;
             }, $rawCtx);
 
+            // Personel / Ortaklar
+            $staffStmt = $pdo->query("SELECT * FROM staff_members ORDER BY createdAt ASC");
+            $staff = array_map(function($s) {
+                $s['sharePercent'] = $s['sharePercent'] !== null ? (float)$s['sharePercent'] : null;
+                $s['monthlySalary'] = $s['monthlySalary'] !== null ? (float)$s['monthlySalary'] : null;
+                $s['active'] = (bool)$s['active'];
+                return $s;
+            }, $staffStmt->fetchAll());
+
+            // Personel Ã–demeleri / Para DaÄŸÄ±tÄ±mÄ±
+            $spStmt = $pdo->query("SELECT * FROM staff_payments ORDER BY date DESC");
+            $staffPayments = array_map(function($sp) {
+                $sp['amount'] = (float)$sp['amount'];
+                return $sp;
+            }, $spStmt->fetchAll());
+
             // Ayarlar
             $setStmt = $pdo->query("SELECT settings_json FROM shop_settings WHERE id = 1");
             $setRow = $setStmt->fetch();
@@ -313,6 +355,8 @@ try {
                 'cash' => $cash,
                 'currentAccounts' => $currentAccounts,
                 'currentTransactions' => $currentTransactions,
+                'staff' => $staff,
+                'staffPayments' => $staffPayments,
                 'settings' => $settings,
                 'serverTime' => date('c')
             ], JSON_UNESCAPED_UNICODE);
@@ -320,7 +364,7 @@ try {
 
 
         // -------------------------------------------------------------
-        // 2. TAM SENKRONİZASYON / YEDEK YÜKLEME
+        // 2. TAM SENKRONÄ°ZASYON / YEDEK YÃœKLEME
         // -------------------------------------------------------------
         case 'sync':
             $pdo->beginTransaction();
@@ -404,25 +448,48 @@ try {
                 }
             }
 
+            if (!empty($body['staff']) && is_array($body['staff'])) {
+                $stmt = $pdo->prepare("REPLACE INTO staff_members (id, name, role, phone, sharePercent, monthlySalary, active, notes, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+                foreach ($body['staff'] as $s) {
+                    $stmt->execute([
+                        $s['id'], $s['name'], $s['role'] ?? 'employee', $s['phone'] ?? null,
+                        isset($s['sharePercent']) ? $s['sharePercent'] : null,
+                        isset($s['monthlySalary']) ? $s['monthlySalary'] : null,
+                        !empty($s['active']) ? 1 : 0, $s['notes'] ?? null, $s['createdAt'], $s['updatedAt']
+                    ]);
+                }
+            }
+
+            if (!empty($body['staffPayments']) && is_array($body['staffPayments'])) {
+                $stmt = $pdo->prepare("REPLACE INTO staff_payments (id, staffId, staffName, type, amount, date, paymentMethod, description, relatedCashTxId, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+                foreach ($body['staffPayments'] as $sp) {
+                    $stmt->execute([
+                        $sp['id'], $sp['staffId'], $sp['staffName'], $sp['type'], $sp['amount'] ?? 0,
+                        $sp['date'], $sp['paymentMethod'] ?? 'cash', $sp['description'] ?? null,
+                        $sp['relatedCashTxId'] ?? null, $sp['createdAt']
+                    ]);
+                }
+            }
+
             if (!empty($body['settings'])) {
                 $stmt = $pdo->prepare("REPLACE INTO shop_settings (id, settings_json) VALUES (1, ?)");
                 $stmt->execute([json_encode($body['settings'], JSON_UNESCAPED_UNICODE)]);
             }
 
             $pdo->commit();
-            echo json_encode(['success' => true, 'message' => 'Tüm veriler SQL veritabanına başarıyla senkronize edildi.']);
+            echo json_encode(['success' => true, 'message' => 'TÃ¼m veriler SQL veritabanÄ±na baÅŸarÄ±yla senkronize edildi.']);
             break;
 
         // -------------------------------------------------------------
-        // 3. SERVİS FİŞİ KAYDET / GÜNCELLE
+        // 3. SERVÄ°S FÄ°ÅÄ° KAYDET / GÃœNCELLE
         // -------------------------------------------------------------
         case 'ticket_save':
             $t = $body;
             if (empty($t['id'])) {
-                throw new Exception('Eksik fiş ID bilgisi');
+                throw new Exception('Eksik fiÅŸ ID bilgisi');
             }
 
-            // Benzersiz ve sıralı numara güvencesi (Var olan başka fişin ezilmesini engeller)
+            // Benzersiz ve sÄ±ralÄ± numara gÃ¼vencesi (Var olan baÅŸka fiÅŸin ezilmesini engeller)
             $t['ticketNumber'] = getNextUniqueTicketNumber($pdo, $t['ticketNumber'] ?? '', $t['id']);
 
             $stmt = $pdo->prepare("REPLACE INTO tickets (id, ticketNumber, customerId, customerName, customerPhone, customerAddress, deviceType, brand, model, serialNumber, warrantyStatus, reportedFault, technicianDiagnosis, technicianName, status, priority, scheduledDate, scheduledTimeSlot, partsUsed, laborCost, transportCost, discount, totalAmount, paymentStatus, paymentMethod, paidAmount, notes, createdAt, updatedAt, completedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
@@ -441,20 +508,20 @@ try {
             break;
 
         // -------------------------------------------------------------
-        // 4. SERVİS FİŞİ SİL (BÜTÜN CİHAZLARDAN ANINDA SİLİNİR!)
+        // 4. SERVÄ°S FÄ°ÅÄ° SÄ°L (BÃœTÃœN CÄ°HAZLARDAN ANINDA SÄ°LÄ°NÄ°R!)
         // -------------------------------------------------------------
         case 'ticket_delete':
             $id = $body['id'] ?? $_GET['id'] ?? '';
-            if (!$id) throw new Exception('Silinecek fiş ID belirtilmedi');
+            if (!$id) throw new Exception('Silinecek fiÅŸ ID belirtilmedi');
 
             $stmt = $pdo->prepare("DELETE FROM tickets WHERE id = ?");
             $stmt->execute([$id]);
 
-            echo json_encode(['success' => true, 'id' => $id, 'message' => 'Fiş SQL veritabanından kalıcı olarak silindi.']);
+            echo json_encode(['success' => true, 'id' => $id, 'message' => 'FiÅŸ SQL veritabanÄ±ndan kalÄ±cÄ± olarak silindi.']);
             break;
 
         // -------------------------------------------------------------
-        // 5. MÜŞTERİ KAYDET & SİL
+        // 5. MÃœÅTERÄ° KAYDET & SÄ°L
         // -------------------------------------------------------------
         case 'customer_save':
             $c = $body;
@@ -474,7 +541,7 @@ try {
             break;
 
         // -------------------------------------------------------------
-        // 6. YEDEK PARÇA KAYDET & SİL
+        // 6. YEDEK PARÃ‡A KAYDET & SÄ°L
         // -------------------------------------------------------------
         case 'part_save':
             $p = $body;
@@ -496,7 +563,7 @@ try {
             break;
 
         // -------------------------------------------------------------
-        // 7. KASA İŞLEMİ KAYDET & SİL
+        // 7. KASA Ä°ÅLEMÄ° KAYDET & SÄ°L
         // -------------------------------------------------------------
         case 'cash_save':
             $c = $body;
@@ -516,7 +583,7 @@ try {
             break;
 
         // -------------------------------------------------------------
-        // 8. CARİ HESAP KAYDET & SİL
+        // 8. CARÄ° HESAP KAYDET & SÄ°L
         // -------------------------------------------------------------
         case 'current_account_save':
             $ca = $body;
@@ -540,7 +607,7 @@ try {
             break;
 
         // -------------------------------------------------------------
-        // 9. CARİ HAREKET KAYDET & SİL
+        // 9. CARÄ° HAREKET KAYDET & SÄ°L
         // -------------------------------------------------------------
         case 'current_tx_save':
             $ct = $body;
@@ -562,6 +629,51 @@ try {
             break;
 
         // -------------------------------------------------------------
+        // 9b. PERSONEL / ORTAK KAYDET & SÄ°L
+        // -------------------------------------------------------------
+        case 'staff_save':
+            $s = $body;
+            if (empty($s['id'])) throw new Exception('Eksik personel ID bilgisi');
+            $stmt = $pdo->prepare("REPLACE INTO staff_members (id, name, role, phone, sharePercent, monthlySalary, active, notes, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+            $stmt->execute([
+                $s['id'], $s['name'], $s['role'] ?? 'employee', $s['phone'] ?? null,
+                isset($s['sharePercent']) ? $s['sharePercent'] : null,
+                isset($s['monthlySalary']) ? $s['monthlySalary'] : null,
+                !empty($s['active']) ? 1 : 0, $s['notes'] ?? null, $s['createdAt'], $s['updatedAt']
+            ]);
+            echo json_encode(['success' => true, 'staff' => $s]);
+            break;
+
+        case 'staff_delete':
+            $id = $body['id'] ?? $_GET['id'] ?? '';
+            $stmt = $pdo->prepare("DELETE FROM staff_members WHERE id = ?");
+            $stmt->execute([$id]);
+            echo json_encode(['success' => true, 'id' => $id]);
+            break;
+
+        // -------------------------------------------------------------
+        // 9c. PERSONEL Ã–DEMESÄ° / PARA DAÄITIMI KAYDET & SÄ°L
+        // -------------------------------------------------------------
+        case 'staff_payment_save':
+            $sp = $body;
+            if (empty($sp['id'])) throw new Exception('Eksik Ã¶deme ID bilgisi');
+            $stmt = $pdo->prepare("REPLACE INTO staff_payments (id, staffId, staffName, type, amount, date, paymentMethod, description, relatedCashTxId, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+            $stmt->execute([
+                $sp['id'], $sp['staffId'], $sp['staffName'], $sp['type'], $sp['amount'] ?? 0,
+                $sp['date'], $sp['paymentMethod'] ?? 'cash', $sp['description'] ?? null,
+                $sp['relatedCashTxId'] ?? null, $sp['createdAt']
+            ]);
+            echo json_encode(['success' => true, 'staffPayment' => $sp]);
+            break;
+
+        case 'staff_payment_delete':
+            $id = $body['id'] ?? $_GET['id'] ?? '';
+            $stmt = $pdo->prepare("DELETE FROM staff_payments WHERE id = ?");
+            $stmt->execute([$id]);
+            echo json_encode(['success' => true, 'id' => $id]);
+            break;
+
+        // -------------------------------------------------------------
         // 10. AYARLARI KAYDET
         // -------------------------------------------------------------
         case 'settings_save':
@@ -572,7 +684,7 @@ try {
 
         default:
             http_response_code(400);
-            echo json_encode(['error' => 'Geçersiz veya eksik action parametresi (örn: ?action=data)']);
+            echo json_encode(['error' => 'GeÃ§ersiz veya eksik action parametresi (Ã¶rn: ?action=data)']);
             break;
 
     }

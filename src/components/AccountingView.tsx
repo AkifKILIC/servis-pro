@@ -29,13 +29,16 @@ import {
   ExternalLink,
   Edit2,
   PieChart,
-  FileSpreadsheet
+  FileSpreadsheet,
+  HandCoins
 } from 'lucide-react';
-import { CashTransaction, PaymentMethod, CurrentAccount, CurrentAccountTransaction, CurrentAccountType } from '../types';
+import { CashTransaction, PaymentMethod, CurrentAccount, CurrentAccountTransaction, CurrentAccountType, StaffMember, StaffPayment } from '../types';
 import { formatCurrency, formatDate, formatDateOnly, generateCurrentAccountWhatsAppLink, getLocalDateString } from '../utils/helpers';
 import { PeriodSelection, createDefaultPeriod, resolvePeriod, isInPeriod } from '../utils/period';
 import { downloadXlsx, CellValue, SheetSpec } from '../utils/excelExport';
+import { isDistributionCategory } from '../utils/staff';
 import { PeriodSelector } from './PeriodSelector';
+import { StaffDistributionTab, StaffFormData, StaffPaymentInput } from './StaffDistributionTab';
 
 // Kasa hesabı etiketleri (Excel çıktısı için)
 const paymentMethodLabel = (m?: string): string => {
@@ -100,6 +103,12 @@ interface AccountingViewProps {
   currentTransactions: CurrentAccountTransaction[];
   onAddCurrentTransaction: (ctx: Omit<CurrentAccountTransaction, 'id' | 'createdAt'>, alsoCreateCashTx?: boolean) => void;
   onDeleteCurrentTransaction: (id: string) => void;
+  staff: StaffMember[];
+  staffPayments: StaffPayment[];
+  onSaveStaff: (data: StaffFormData, id?: string) => void;
+  onDeleteStaff: (id: string) => 'deleted' | 'deactivated';
+  onAddStaffPayments: (entries: StaffPaymentInput[], alsoCreateCashTx?: boolean) => void;
+  onDeleteStaffPayment: (id: string) => void;
   shopName: string;
   shopPhone: string;
 }
@@ -115,11 +124,17 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
   currentTransactions,
   onAddCurrentTransaction,
   onDeleteCurrentTransaction,
+  staff,
+  staffPayments,
+  onSaveStaff,
+  onDeleteStaff,
+  onAddStaffPayments,
+  onDeleteStaffPayment,
   shopName,
   shopPhone,
 }) => {
   // Aktif Ana Sekme
-  const [activeTab, setActiveTab] = useState<'cash' | 'current' | 'receivables' | 'profit_loss'>('cash');
+  const [activeTab, setActiveTab] = useState<'cash' | 'current' | 'receivables' | 'profit_loss' | 'distribution'>('cash');
 
   // --- KASA & BANKA SEKME DURUMLARI ---
   const [isCashModalOpen, setIsCashModalOpen] = useState(false);
@@ -277,8 +292,13 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
       .filter(t => t.type === 'income')
       .reduce((sum, t) => sum + t.amount, 0);
 
+    // Ortaklara kâr payı / şahsi çekim gider değil, kâr dağıtımıdır → ayrı izlenir
+    const distributed = periodTransactions
+      .filter(t => t.type === 'expense' && isDistributionCategory(t.category))
+      .reduce((sum, t) => sum + t.amount, 0);
+
     const expense = periodTransactions
-      .filter(t => t.type === 'expense')
+      .filter(t => t.type === 'expense' && !isDistributionCategory(t.category))
       .reduce((sum, t) => sum + t.amount, 0);
 
     const partsCost = periodTransactions
@@ -288,12 +308,13 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
     const operationalExpense = expense - partsCost;
     const grossProfit = income - partsCost;
     const netProfit = income - expense;
+    const retainedProfit = netProfit - distributed;
     const profitMargin = income > 0 ? ((netProfit / income) * 100).toFixed(1) : '0';
 
-    // Kategoriye Göre Gider Dağılımı
+    // Kategoriye Göre Gider Dağılımı (kâr dağıtımları hariç)
     const expenseCategories: Record<string, number> = {};
     periodTransactions
-      .filter(t => t.type === 'expense')
+      .filter(t => t.type === 'expense' && !isDistributionCategory(t.category))
       .forEach(t => {
         expenseCategories[t.category] = (expenseCategories[t.category] || 0) + t.amount;
       });
@@ -313,6 +334,8 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
       operationalExpense,
       grossProfit,
       netProfit,
+      distributed,
+      retainedProfit,
       profitMargin,
       expenseCategories,
       incomeCategories,
@@ -339,6 +362,8 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
       ['İşletme & Genel Giderler', { value: plData.operationalExpense, style: 'currency' }, plData.income > 0 ? { value: plData.operationalExpense / plData.income, style: 'percent' } : null],
       ['Toplam Gider', { value: plData.expense, style: 'currency' }, null],
       [{ value: 'DÖNEM NET KÂRI', style: 'bold' }, { value: plData.netProfit, style: 'boldCurrency' }, { value: margin, style: 'percent' }],
+      ['Ortaklara Dağıtılan Kâr (Kâr Payı + Çekim)', { value: plData.distributed, style: 'currency' }, null],
+      [{ value: 'Dağıtım Sonrası Şirkette Kalan', style: 'bold' }, { value: plData.retainedProfit, style: 'boldCurrency' }, null],
       ['İşlem Sayısı', plData.count, null],
       [],
       [{ value: 'Gider Kategorisi', style: 'header' }, { value: 'Tutar', style: 'header' }, { value: 'Pay', style: 'header' }],
@@ -654,6 +679,16 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
         >
           <PieChart size={18} />
           <span>Kâr / Zarar & Finansal Rapor</span>
+        </button>
+
+        <button
+          id="accounting-tab-distribution"
+          className={`btn ${activeTab === 'distribution' ? 'btn-primary' : 'btn-secondary'}`}
+          onClick={() => setActiveTab('distribution')}
+          style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 18px', fontWeight: 600 }}
+        >
+          <HandCoins size={18} />
+          <span>Para Dağıtımı & Personel ({staff.filter(s => s.active).length})</span>
         </button>
       </div>
 
@@ -1380,6 +1415,24 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
                     {formatCurrency(plData.netProfit)}
                   </strong>
                 </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderBottom: '1px dashed var(--border-subtle)' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>- Ortaklara Dağıtılan Kâr:</span>
+                  <span style={{ color: '#f59e0b', fontWeight: 600 }}>-{formatCurrency(plData.distributed)}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0' }}>
+                  <span style={{ fontWeight: 600 }}>Dağıtım Sonrası Şirkette Kalan:</span>
+                  <strong style={{ color: plData.retainedProfit >= 0 ? '#10b981' : '#ef4444' }}>{formatCurrency(plData.retainedProfit)}</strong>
+                </div>
+                <button
+                  id="pl-goto-distribution-btn"
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => setActiveTab('distribution')}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', alignSelf: 'flex-start' }}
+                >
+                  <HandCoins size={14} />
+                  <span>Para Dağıtımı & Personel</span>
+                </button>
               </div>
             </div>
           </div>
@@ -1437,6 +1490,22 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
             )}
           </div>
         </div>
+      )}
+
+      {/* ======================================================== */}
+      {/* 5. SEKME: ŞİRKET İÇİ PARA DAĞITIMI (ORTAK / PERSONEL)    */}
+      {/* ======================================================== */}
+      {activeTab === 'distribution' && (
+        <StaffDistributionTab
+          transactions={transactions}
+          staff={staff}
+          staffPayments={staffPayments}
+          onSaveStaff={onSaveStaff}
+          onDeleteStaff={onDeleteStaff}
+          onAddStaffPayments={onAddStaffPayments}
+          onDeleteStaffPayment={onDeleteStaffPayment}
+          shopName={shopName}
+        />
       )}
 
       {/* ======================================================== */}
