@@ -473,10 +473,21 @@ export const TicketList: React.FC<TicketListProps> = ({
 
                 {/* Action Buttons Bar */}
                 <div 
-                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: '10px', borderTop: '1px solid var(--border-subtle)' }}
+                  className="ticket-card-actions"
+                  style={{ 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    justifyContent: 'space-between', 
+                    flexWrap: 'wrap',
+                    gap: '8px',
+                    paddingTop: '10px', 
+                    borderTop: '1px solid var(--border-subtle)',
+                    width: '100%',
+                    boxSizing: 'border-box'
+                  }}
                   onClick={e => e.stopPropagation()}
                 >
-                  <div style={{ display: 'flex', gap: '6px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                     <a 
                       href={`tel:${ticket.customerPhone}`}
                       className="btn btn-secondary btn-sm"
@@ -517,12 +528,12 @@ export const TicketList: React.FC<TicketListProps> = ({
                     </a>
                   </div>
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', marginLeft: 'auto' }}>
                     {ticket.paymentStatus === 'pending_approval' && onApprovePayment && (
                       <button 
                         type="button"
                         className="btn btn-primary btn-sm"
-                        style={{ background: 'linear-gradient(135deg, #10b981, #059669)', border: 'none', fontWeight: 800, padding: '5px 10px', fontSize: '0.78rem' }}
+                        style={{ background: 'linear-gradient(135deg, #10b981, #059669)', border: 'none', fontWeight: 800, padding: '5px 10px', fontSize: '0.78rem', whiteSpace: 'nowrap' }}
                         onClick={(e) => {
                           e.stopPropagation();
                           onApprovePayment(ticket.id);
@@ -537,6 +548,7 @@ export const TicketList: React.FC<TicketListProps> = ({
                       className="btn btn-secondary btn-sm"
                       onClick={() => onPrintTicket(ticket)}
                       title="Servis Fişi / Makbuz Yazdır"
+                      style={{ whiteSpace: 'nowrap' }}
                     >
                       <Printer size={14} />
                       <span>Yazdır</span>

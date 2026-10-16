@@ -948,12 +948,29 @@ class StorageService {
 
   /**
    * Bir cari hareketin bakiyeye etkisi (+ alacağımız artar, - borcumuz artar).
-   * Tedarikçi: debit = mal aldık (borç ↑ → -), credit = ödeme yaptık (+)
-   * Müşteri/Diğer: debit = hizmet/parça verdik (alacak ↑ → +), credit = tahsilat aldık (-)
+   * Alacaklı cari hesapta (balance > 0): ödeme/tahsilat (credit) alacağı DÜŞÜRÜR (-amt).
+   * Borçlu cari hesapta (balance < 0): ödeme (credit) borcu DÜŞÜRÜR / sıfıra yaklaştırır (+amt).
    */
   getTransactionEffect(accountId: string, type: CurrentAccountTransaction['type'], amount: number): number {
     const account = this.getCurrentAccounts().find(a => a.id === accountId);
     const amt = Math.abs(Number(amount) || 0);
+    const bal = Number(account?.balance) || 0;
+
+    // Alacaklı cari hesapta (bal > 0):
+    // Ödeme / tahsilat (credit) alacağı DÜŞÜRÜR (-amt)
+    // Borçlandırma (debit) alacağı ARTIRIR (+amt)
+    if (bal > 0) {
+      return type === 'credit' ? -amt : amt;
+    }
+
+    // Borçlu cari hesapta (bal < 0):
+    // Ödeme (credit) borcu DÜŞÜRÜR / sıfıra yaklaştırır (+amt)
+    // Mal/hizmet borçlanması (debit) borcu ARTIRIR (-amt)
+    if (bal < 0) {
+      return type === 'credit' ? amt : -amt;
+    }
+
+    // Bakiye 0 ise varsayılan tür kuralı:
     if (account?.type === 'supplier') {
       return type === 'debit' ? -amt : amt;
     }

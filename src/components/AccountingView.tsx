@@ -41,30 +41,59 @@ import { PeriodSelector } from './PeriodSelector';
 import { StaffDistributionTab, StaffFormData, StaffPaymentInput } from './StaffDistributionTab';
 import { CariPicker, balanceLabel } from './CariPicker';
 
-// Kasa ↔ Cari bağlantılı kategoriler (bu kategorilerde cari seçimi zorunludur)
+// Kasa ↔ Cari bağlantılı kategoriler (bu kategorilerde cari seçimi açılır)
 const CARI_CASH_CATEGORIES = ['Müşteri Cari Tahsilat', 'Toptancı Cari Ödeme'];
 
+export const isCariRelatedCategory = (cat?: string): boolean => {
+  if (!cat) return false;
+  const c = cat.toLowerCase();
+  return c.includes('cari') || CARI_CASH_CATEGORIES.includes(cat);
+};
+
 // Bir cari hareketin bakiyeye etkisi (+ alacağımız artar, - borcumuz artar).
-// storage.getTransactionEffect ile aynı kural.
-const cariTxEffect = (accType: CurrentAccountType, txType: 'debit' | 'credit', amount: number): number => {
+// storage.getTransactionEffect ile birebir aynı kural:
+// Alacaklı cari hesapta (balance > 0): ödeme/tahsilat (credit) alacağı DÜŞÜRÜR (-amt).
+// Borçlu cari hesapta (balance < 0): ödeme (credit) borcu DÜŞÜRÜR / sıfıra yaklaştırır (+amt).
+const cariTxEffect = (
+  accType: CurrentAccountType, 
+  txType: 'debit' | 'credit', 
+  amount: number,
+  currentBalance?: number
+): number => {
   const amt = Math.abs(Number(amount) || 0);
+  const bal = typeof currentBalance === 'number' ? currentBalance : 0;
+
+  // Alacaklı cari hesapta (bal > 0):
+  // Ödeme / tahsilat (credit) alacağı DÜŞÜRÜR (-amt)
+  // Borçlandırma (debit) alacağı ARTIRIR (+amt)
+  if (bal > 0) {
+    return txType === 'credit' ? -amt : amt;
+  }
+
+  // Borçlu cari hesapta (bal < 0):
+  // Ödeme (credit) borcu DÜŞÜRÜR / sıfıra yaklaştırır (+amt)
+  // Mal/hizmet borçlanması (debit) borcu ARTIRIR (-amt)
+  if (bal < 0) {
+    return txType === 'credit' ? amt : -amt;
+  }
+
+  // Bakiye 0 ise varsayılan tür kuralı:
   if (accType === 'supplier') return txType === 'debit' ? -amt : amt;
   return txType === 'debit' ? amt : -amt;
 };
 
-// Kasa hareketinin yönüne göre cari hareket türü
-// Toptancı: gider = ödeme (credit), gelir = iade/para geldi (debit)
-// Müşteri : gelir = tahsilat (credit), gider = müşteriye para verildi (debit)
-const cashToCariTxType = (accType: CurrentAccountType, cashType: 'income' | 'expense'): 'debit' | 'credit' => {
-  if (accType === 'supplier') return cashType === 'expense' ? 'credit' : 'debit';
-  return cashType === 'income' ? 'credit' : 'debit';
+// Kasadan yapılan işleme göre cari hareket türü:
+// Kasadan Gider (ödeme) veya Gelir (tahsilat) yapıldığında her zaman cari hesabın bakiyesini
+// kapatmaya / düşürmeye yönelik bir ödeme/tahsilat ('credit') kaydı oluşturulur.
+const cashToCariTxType = (_accType: CurrentAccountType, _cashType: 'income' | 'expense'): 'debit' | 'credit' => {
+  return 'credit';
 };
 
 // Bu hareket türü bakiyeyi kapatıyorsa, kapatmak için gereken tutar
 const closingAmountFor = (acc: CurrentAccount, txType: 'debit' | 'credit'): number => {
   const bal = Number(acc.balance) || 0;
   if (bal === 0) return 0;
-  const dir = cariTxEffect(acc.type, txType, 1);
+  const dir = cariTxEffect(acc.type, txType, 1, bal);
   return Math.sign(dir) !== Math.sign(bal) ? Math.abs(bal) : 0;
 };
 
@@ -520,7 +549,7 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
     const txDate = dateInputToIso(cashDate);
     const linkedCari = cashType !== 'transfer' ? currentAccounts.find(a => a.id === cashCariId) : undefined;
 
-    if (cashType !== 'transfer' && CARI_CASH_CATEGORIES.includes(cashCategory) && !linkedCari) {
+    if (cashType !== 'transfer' && isCariRelatedCategory(cashCategory) && !linkedCari) {
       alert('Bu kategori bir cari hesaba işlenir. Lütfen listeden cari hesabı seçiniz.');
       return;
     }
@@ -1789,7 +1818,13 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
                     <select 
                       className="form-control"
                       value={cashCategory}
-                      onChange={e => setCashCategory(e.target.value)}
+                      onChange={e => {
+                        const val = e.target.value;
+                        setCashCategory(val);
+                        if (!isCariRelatedCategory(val)) {
+                          setCashCariId('');
+                        }
+                      }}
                     >
                       {cashType === 'income' ? (
                         <>
@@ -1845,35 +1880,26 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
                   </div>
                 )}
 
-                {cashType !== 'transfer' && (() => {
-                  const isCariCategory = CARI_CASH_CATEGORIES.includes(cashCategory);
+                {cashType !== 'transfer' && isCariRelatedCategory(cashCategory) && (() => {
                   const selCari = currentAccounts.find(a => a.id === cashCariId);
                   return (
                     <div className="form-group" style={{ marginBottom: 0 }}>
                       <label className="form-label" htmlFor="cash-cari-picker">
-                        Cari Hesap {isCariCategory
-                          ? <span style={{ color: '#ef4444' }}>* (zorunlu)</span>
-                          : <span style={{ color: 'var(--text-dim)', fontWeight: 400 }}>(isteğe bağlı – seçilirse cari bakiyesine de işlenir)</span>}
+                        Cari Hesap <span style={{ color: '#ef4444' }}>* (zorunlu)</span>
                       </label>
                       <CariPicker
                         id="cash-cari-picker"
                         accounts={currentAccounts}
                         value={cashCariId}
                         preferType={cashType === 'income' ? 'customer' : 'supplier'}
-                        required={isCariCategory}
-                        onChange={id => {
-                          setCashCariId(id);
-                          // Cari seçilince kategoriyi otomatik cari kategorisine al
-                          if (id && !CARI_CASH_CATEGORIES.includes(cashCategory)) {
-                            setCashCategory(cashType === 'income' ? 'Müşteri Cari Tahsilat' : 'Toptancı Cari Ödeme');
-                          }
-                        }}
+                        required={true}
+                        onChange={id => setCashCariId(id)}
                       />
                       {selCari && (
                         <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: '6px' }}>
                           {cashType === 'income'
-                            ? (selCari.type === 'supplier' ? 'Toptancıdan para geldi (iade): borcumuz artar / alacağımız azalır.' : 'Müşteriden tahsilat: alacağımız azalır.')
-                            : (selCari.type === 'supplier' ? 'Toptancıya ödeme: borcumuz azalır.' : 'Müşteriye para verildi (iade): alacağımız artar / borcumuz azalır.')}
+                            ? (selCari.balance > 0 ? 'Müşteriden tahsilat: firmanın alacağı azalır.' : 'Tahsilat: cari hesaba işlenir.')
+                            : (selCari.balance > 0 ? 'Alacaklı cariye ödeme: carinin alacağı düşer.' : 'Toptancıya ödeme: borcumuz azalır.')}
                         </div>
                       )}
                     </div>
@@ -1894,7 +1920,7 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
                     onChange={e => setCashAmount(e.target.value)}
                   />
                   {(() => {
-                    const selCari = cashType !== 'transfer' ? currentAccounts.find(a => a.id === cashCariId) : undefined;
+                    const selCari = cashType !== 'transfer' && isCariRelatedCategory(cashCategory) ? currentAccounts.find(a => a.id === cashCariId) : undefined;
                     if (!selCari) return null;
                     const closing = closingAmountFor(selCari, cashToCariTxType(selCari.type, cashType as 'income' | 'expense'));
                     return closing > 0 ? (
@@ -1912,10 +1938,10 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
 
                 {/* Cari seçiliyse: mevcut bakiye → işlem sonrası bakiye */}
                 {(() => {
-                  const selCari = cashType !== 'transfer' ? currentAccounts.find(a => a.id === cashCariId) : undefined;
+                  const selCari = cashType !== 'transfer' && isCariRelatedCategory(cashCategory) ? currentAccounts.find(a => a.id === cashCariId) : undefined;
                   if (!selCari) return null;
                   const amt = parseFloat(cashAmount) || 0;
-                  const delta = cariTxEffect(selCari.type, cashToCariTxType(selCari.type, cashType as 'income' | 'expense'), amt);
+                  const delta = cariTxEffect(selCari.type, cashToCariTxType(selCari.type, cashType as 'income' | 'expense'), amt, selCari.balance);
                   const next = Math.round((selCari.balance + delta) * 100) / 100;
                   const cur = balanceLabel(selCari.balance);
                   const nxt = balanceLabel(next);
@@ -1946,7 +1972,7 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
                   <input 
                     id="cash-description"
                     type="text" 
-                    required={!(cashType !== 'transfer' && cashCariId)}
+                    required={!(cashType !== 'transfer' && isCariRelatedCategory(cashCategory) && cashCariId)}
                     className="form-control" 
                     placeholder={cashType === 'transfer' ? 'Örn: Dükkan nakit kasasından Ziraat Bankası hesabına yatırıldı' : 'Örn: Ege toptancıdan 5 adet pompa alımı'}
                     value={cashDescription}
@@ -2433,7 +2459,7 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
                   {/* Eski bakiye → Yeni bakiye önizlemesi */}
                   {(() => {
                     const amt = parseFloat(movementAmount) || 0;
-                    const delta = cariTxEffect(activeCari.type, movementType, amt);
+                    const delta = cariTxEffect(activeCari.type, movementType, amt, activeCari.balance);
                     const next = Math.round((activeCari.balance + delta) * 100) / 100;
                     const cur = balanceLabel(activeCari.balance);
                     const nxt = balanceLabel(next);

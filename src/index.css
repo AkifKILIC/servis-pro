@@ -582,12 +582,31 @@ textarea.form-control {
   flex-direction: column;
   gap: 14px;
   border-left: 4px solid var(--ticket-status-color, #3b82f6);
+  box-sizing: border-box;
+  max-width: 100%;
 }
 
 .ticket-card:hover {
   transform: translateY(-3px);
   box-shadow: var(--shadow-md);
   border-color: var(--primary);
+}
+
+.ticket-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.ticket-card-actions .btn-sm {
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .ticket-header {
