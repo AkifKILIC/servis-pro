@@ -845,7 +845,8 @@ class StorageService {
     const newAccount: CurrentAccount = {
       ...data,
       id: 'cari-' + (data.type === 'supplier' ? 'top-' : 'mus-') + Date.now(),
-      balance: initBal,
+      // Bakiye 0 ile başlar; açılış devri aşağıda hareket olarak eklenince bakiyeye işlenir
+      balance: 0,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -854,11 +855,17 @@ class StorageService {
     this.saveCurrentAccounts(accounts);
 
     // Açılış bakiyesi varsa ilk hareket olarak kaydet
+    // initBal > 0: alacaklıyız, initBal < 0: borçluyuz.
+    // Tedarikçide debit borcu (-), müşteride debit alacağı (+) artırır.
     if (initBal !== 0) {
+      const isSupplier = newAccount.type === 'supplier';
+      const type: CurrentAccountTransaction['type'] = isSupplier
+        ? (initBal < 0 ? 'debit' : 'credit')
+        : (initBal > 0 ? 'debit' : 'credit');
       this.addCurrentTransaction({
         accountId: newAccount.id,
         accountName: newAccount.name,
-        type: initBal < 0 ? 'debit' : 'credit',
+        type,
         amount: Math.abs(initBal),
         date: new Date().toISOString(),
         description: 'Açılış Devir Bakiyesi',
@@ -866,7 +873,7 @@ class StorageService {
       });
     }
 
-    return newAccount;
+    return this.getCurrentAccounts().find(a => a.id === newAccount.id) || newAccount;
   }
 
   updateCurrentAccount(id: string, updates: Partial<CurrentAccount>): CurrentAccount | null {
@@ -908,30 +915,66 @@ class StorageService {
 
   addCurrentTransaction(tx: Omit<CurrentAccountTransaction, 'id' | 'createdAt'>): CurrentAccountTransaction {
     const txs = this.getCurrentTransactions();
+    let newId = 'ctx-' + Date.now();
+    // Aynı milisaniyede birden fazla kayıt oluşursa ID çakışmasını önle
+    if (txs.some(t => t.id === newId)) {
+      newId += '-' + Math.random().toString(36).slice(2, 7);
+    }
     const newTx: CurrentAccountTransaction = {
       ...tx,
-      id: 'ctx-' + Date.now(),
+      amount: Math.abs(Number(tx.amount) || 0),
+      id: newId,
       createdAt: new Date().toISOString(),
     };
     txs.unshift(newTx);
     this.saveCurrentTransactions(txs);
 
-    // Cari bakiyesini otomatik güncelle
-    this.recalculateAccountBalance(tx.accountId);
+    // Cari bakiyesini MEVCUT bakiyenin üzerine ekleyerek güncelle.
+    // (Sıfırdan yeniden hesaplamak, hareket kaydı olmayan eski/devir bakiyeleri siliyordu.)
+    this.applyBalanceDelta(newTx.accountId, this.getTransactionEffect(newTx.accountId, newTx.type, newTx.amount));
     return newTx;
   }
 
   deleteCurrentTransaction(id: string): boolean {
     const txs = this.getCurrentTransactions();
     const targetTx = txs.find(t => t.id === id);
+    if (!targetTx) return false;
     const filtered = txs.filter(t => t.id !== id);
     this.saveCurrentTransactions(filtered);
-    if (targetTx) {
-      this.recalculateAccountBalance(targetTx.accountId);
-    }
+    // Silinen hareketin etkisini mevcut bakiyeden geri al
+    this.applyBalanceDelta(targetTx.accountId, -this.getTransactionEffect(targetTx.accountId, targetTx.type, targetTx.amount));
     return true;
   }
 
+  /**
+   * Bir cari hareketin bakiyeye etkisi (+ alacağımız artar, - borcumuz artar).
+   * Tedarikçi: debit = mal aldık (borç ↑ → -), credit = ödeme yaptık (+)
+   * Müşteri/Diğer: debit = hizmet/parça verdik (alacak ↑ → +), credit = tahsilat aldık (-)
+   */
+  getTransactionEffect(accountId: string, type: CurrentAccountTransaction['type'], amount: number): number {
+    const account = this.getCurrentAccounts().find(a => a.id === accountId);
+    const amt = Math.abs(Number(amount) || 0);
+    if (account?.type === 'supplier') {
+      return type === 'debit' ? -amt : amt;
+    }
+    return type === 'debit' ? amt : -amt;
+  }
+
+  private applyBalanceDelta(accountId: string, delta: number): number {
+    const account = this.getCurrentAccounts().find(a => a.id === accountId);
+    if (!account) return 0;
+    const current = Number(account.balance) || 0;
+    // Kuruş hassasiyetinde yuvarla (kayan nokta hatalarını önler)
+    const next = Math.round((current + delta) * 100) / 100;
+    this.updateCurrentAccount(accountId, { balance: next });
+    return next;
+  }
+
+  /**
+   * DİKKAT: Bakiyeyi yalnızca kayıtlı hareketlerden sıfırdan hesaplar.
+   * Hareket kaydı olmayan devir bakiyelerini SİLER. Normal akışta kullanılmaz;
+   * yalnızca bilinçli bir "yeniden hesapla" işlemi için tutulmuştur.
+   */
   recalculateAccountBalance(accountId: string): number {
     const accounts = this.getCurrentAccounts();
     const account = accounts.find(a => a.id === accountId);

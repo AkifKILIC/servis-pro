@@ -660,16 +660,39 @@ export const App: React.FC = () => {
     syncService.saveCashToSql(newTx);
   };
 
-  const handleDeleteTransaction = (id: string) => {
+  const handleDeleteTransaction = (id: string, alsoDeleteLinkedCurrentTx: boolean = false) => {
     storage.deleteCashTransaction(id);
     syncService.deleteCashFromSql(id);
+
+    // Bu kasa hareketine bağlı cari hareket(ler) varsa, kullanıcı onayladıysa onları da geri al
+    if (alsoDeleteLinkedCurrentTx) {
+      const linked = storage.getCurrentTransactions().filter(ct => ct.relatedCashTxId === id);
+      linked.forEach(ct => {
+        storage.deleteCurrentTransaction(ct.id);
+        syncService.deleteCurrentTxFromSql(ct.id);
+        const acc = storage.getCurrentAccounts().find(a => a.id === ct.accountId);
+        if (acc) syncService.saveCurrentAccountToSql(acc);
+      });
+      if (linked.length > 0) {
+        setCurrentAccounts(storage.getCurrentAccounts());
+        setCurrentTransactions(storage.getCurrentTransactions());
+      }
+    }
+
     setTransactions(storage.getCashTransactions());
   };
 
   // Cari Hesap İşlemleri
   const handleAddCurrentAccount = (caData: Omit<CurrentAccount, 'id' | 'createdAt' | 'updatedAt' | 'balance'> & { initialBalance?: number }) => {
     const newAccount = storage.addCurrentAccount(caData);
-    syncService.saveCurrentAccountToSql(newAccount);
+    // Bakiye (açılış devri dahil) güncel hâliyle gönderilir
+    const savedAccount = storage.getCurrentAccounts().find(a => a.id === newAccount.id) || newAccount;
+    syncService.saveCurrentAccountToSql(savedAccount);
+    // Açılış devir hareketi de veritabanına yazılmalı; aksi halde sunucudan
+    // yeniden yüklendiğinde hareket kaybolur ve ekstre bakiyeyle tutmaz.
+    storage.getCurrentTransactions()
+      .filter(t => t.accountId === newAccount.id)
+      .forEach(t => syncService.saveCurrentTxToSql(t));
     setCurrentAccounts(storage.getCurrentAccounts());
     setCurrentTransactions(storage.getCurrentTransactions());
   };
@@ -691,12 +714,12 @@ export const App: React.FC = () => {
 
   const handleAddCurrentTransaction = (
     ctxData: Omit<CurrentAccountTransaction, 'id' | 'createdAt'>, 
-    alsoCreateCashTx: boolean = true
+    alsoCreateCashTx: boolean = true,
+    cashOptions?: { category?: string; description?: string }
   ) => {
-    const newTx = storage.addCurrentTransaction(ctxData);
-    syncService.saveCurrentTxToSql(newTx);
+    let relatedCashTxId: string | undefined = ctxData.relatedCashTxId;
 
-    // İsteğe bağlı olarak Kasa Tablosuna da Gelir/Gider ekle
+    // İsteğe bağlı olarak Kasa Tablosuna da Gelir/Gider ekle (cari hareketle bağlantılı)
     if (alsoCreateCashTx) {
       const account = storage.getCurrentAccounts().find(a => a.id === ctxData.accountId);
       const isSupplier = account?.type === 'supplier';
@@ -708,15 +731,19 @@ export const App: React.FC = () => {
 
       const cashTx = storage.addCashTransaction({
         type: cashType,
-        category: isSupplier ? 'Toptancı Cari Ödeme' : 'Müşteri Cari Tahsilat',
+        category: cashOptions?.category || (isSupplier ? 'Toptancı Cari Ödeme' : 'Müşteri Cari Tahsilat'),
         amount: ctxData.amount,
         date: ctxData.date || new Date().toISOString(),
-        description: `${ctxData.accountName} - ${ctxData.description}`,
+        description: cashOptions?.description || `${ctxData.accountName} - ${ctxData.description}`,
         paymentMethod: ctxData.paymentMethod || 'cash',
       });
+      relatedCashTxId = cashTx.id;
       syncService.saveCashToSql(cashTx);
       setTransactions(storage.getCashTransactions());
     }
+
+    const newTx = storage.addCurrentTransaction({ ...ctxData, relatedCashTxId });
+    syncService.saveCurrentTxToSql(newTx);
 
     const updatedAccount = storage.getCurrentAccounts().find(a => a.id === ctxData.accountId);
     if (updatedAccount) {
@@ -726,7 +753,7 @@ export const App: React.FC = () => {
     setCurrentTransactions(storage.getCurrentTransactions());
   };
 
-  const handleDeleteCurrentTransaction = (id: string) => {
+  const handleDeleteCurrentTransaction = (id: string, alsoDeleteLinkedCash: boolean = false) => {
     const target = storage.getCurrentTransactions().find(t => t.id === id);
     storage.deleteCurrentTransaction(id);
     syncService.deleteCurrentTxFromSql(id);
@@ -734,6 +761,12 @@ export const App: React.FC = () => {
       const updatedAccount = storage.getCurrentAccounts().find(a => a.id === target.accountId);
       if (updatedAccount) {
         syncService.saveCurrentAccountToSql(updatedAccount);
+      }
+      // Kullanıcı onayladıysa bağlı kasa hareketini de sil
+      if (alsoDeleteLinkedCash && target.relatedCashTxId) {
+        storage.deleteCashTransaction(target.relatedCashTxId);
+        syncService.deleteCashFromSql(target.relatedCashTxId);
+        setTransactions(storage.getCashTransactions());
       }
     }
     setCurrentAccounts(storage.getCurrentAccounts());

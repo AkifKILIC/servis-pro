@@ -1,7 +1,7 @@
 {
   "name": "servispro",
   "private": true,
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "Beyaz Eşya Teknik Servis Yönetim ve Saha Takip Sistemi",
   "author": "ServisPro",
   "main": "electron/main.cjs",

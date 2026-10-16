@@ -1616,6 +1616,213 @@ textarea.form-control {
   }
 }
 
+/* ==========================================
+   CARİ SEÇİCİ (Kasa hareketinde cari bağlama)
+   ========================================== */
+.cari-picker {
+  position: relative;
+  width: 100%;
+}
+.cari-picker-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.cari-picker-input {
+  padding-left: 36px !important;
+  padding-right: 34px !important;
+}
+.cari-picker-search-icon {
+  position: absolute;
+  left: 12px;
+  color: var(--text-dim);
+  pointer-events: none;
+}
+.cari-picker-chevron {
+  position: absolute;
+  right: 10px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.cari-picker-selected {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--primary);
+  border-radius: var(--radius-sm);
+  color: var(--text-main);
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  box-shadow: 0 0 0 3px var(--primary-light);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+.cari-picker-selected:hover {
+  border-color: var(--primary-hover);
+}
+.cari-picker-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+}
+.cari-picker-icon.is-supplier {
+  background: var(--rose-light);
+  color: var(--rose);
+}
+.cari-picker-icon.is-customer {
+  background: var(--emerald-light);
+  color: var(--emerald);
+}
+.cari-picker-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+.cari-picker-main strong {
+  font-size: 0.9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cari-picker-main small {
+  font-size: 0.74rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cari-picker-clear {
+  display: inline-flex;
+  padding: 5px;
+  border-radius: 6px;
+  color: var(--text-muted);
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.cari-picker-clear:hover {
+  background: var(--rose-light);
+  color: var(--rose);
+}
+.cari-picker-dropdown {
+  position: absolute;
+  z-index: 60;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  max-height: 280px;
+  overflow-y: auto;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-hover);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: 6px;
+  animation: cariPickerIn 0.16s ease-out;
+}
+@keyframes cariPickerIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.cari-picker-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+.cari-picker-option.is-active {
+  background: var(--primary-light);
+}
+.cari-picker-option.is-selected strong {
+  color: var(--primary);
+}
+.cari-picker-balance {
+  flex-shrink: 0;
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-align: right;
+}
+.cari-picker-empty {
+  padding: 18px;
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+/* Bakiye önizleme kartı (eski bakiye → yeni bakiye) */
+.balance-preview {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.08), rgba(168, 85, 247, 0.08));
+  border: 1px dashed rgba(59, 130, 246, 0.35);
+}
+.balance-preview-cell span {
+  display: block;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+.balance-preview-cell strong {
+  display: block;
+  font-size: 1.02rem;
+  font-weight: 800;
+}
+.balance-preview-cell small {
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+.balance-preview-cell.is-next {
+  text-align: right;
+}
+.balance-preview-delta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+/* Kasa listesinde bağlı cari rozeti */
+.cari-link-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--purple-light);
+  color: var(--purple);
+  font-size: 0.74rem;
+  font-weight: 700;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  transition: transform var(--transition-fast), background var(--transition-fast);
+}
+.cari-link-chip:hover {
+  transform: translateY(-1px);
+  background: rgba(168, 85, 247, 0.25);
+}
+.ledger-devir-row td {
+  background: rgba(245, 158, 11, 0.07);
+  font-style: italic;
+}
+
 /* PRINT MEDIA STYLES (Servis Fişi / Makbuzu) */
 @media print {
   body {

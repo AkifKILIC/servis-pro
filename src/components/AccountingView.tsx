@@ -39,6 +39,41 @@ import { downloadXlsx, CellValue, SheetSpec } from '../utils/excelExport';
 import { isDistributionCategory } from '../utils/staff';
 import { PeriodSelector } from './PeriodSelector';
 import { StaffDistributionTab, StaffFormData, StaffPaymentInput } from './StaffDistributionTab';
+import { CariPicker, balanceLabel } from './CariPicker';
+
+// Kasa ↔ Cari bağlantılı kategoriler (bu kategorilerde cari seçimi zorunludur)
+const CARI_CASH_CATEGORIES = ['Müşteri Cari Tahsilat', 'Toptancı Cari Ödeme'];
+
+// Bir cari hareketin bakiyeye etkisi (+ alacağımız artar, - borcumuz artar).
+// storage.getTransactionEffect ile aynı kural.
+const cariTxEffect = (accType: CurrentAccountType, txType: 'debit' | 'credit', amount: number): number => {
+  const amt = Math.abs(Number(amount) || 0);
+  if (accType === 'supplier') return txType === 'debit' ? -amt : amt;
+  return txType === 'debit' ? amt : -amt;
+};
+
+// Kasa hareketinin yönüne göre cari hareket türü
+// Toptancı: gider = ödeme (credit), gelir = iade/para geldi (debit)
+// Müşteri : gelir = tahsilat (credit), gider = müşteriye para verildi (debit)
+const cashToCariTxType = (accType: CurrentAccountType, cashType: 'income' | 'expense'): 'debit' | 'credit' => {
+  if (accType === 'supplier') return cashType === 'expense' ? 'credit' : 'debit';
+  return cashType === 'income' ? 'credit' : 'debit';
+};
+
+// Bu hareket türü bakiyeyi kapatıyorsa, kapatmak için gereken tutar
+const closingAmountFor = (acc: CurrentAccount, txType: 'debit' | 'credit'): number => {
+  const bal = Number(acc.balance) || 0;
+  if (bal === 0) return 0;
+  const dir = cariTxEffect(acc.type, txType, 1);
+  return Math.sign(dir) !== Math.sign(bal) ? Math.abs(bal) : 0;
+};
+
+// <input type="date"> değerini ISO tarihe çevirir (bugün ise şu anki saat kullanılır)
+const dateInputToIso = (val: string): string => {
+  if (!val || val === getLocalDateString()) return new Date().toISOString();
+  const [y, m, d] = val.split('-').map(Number);
+  return new Date(y, (m || 1) - 1, d || 1, 12, 0, 0).toISOString();
+};
 
 // Kasa hesabı etiketleri (Excel çıktısı için)
 const paymentMethodLabel = (m?: string): string => {
@@ -95,14 +130,18 @@ const buildCashTransactionsSheet = (list: CashTransaction[], name = 'Kasa Hareke
 interface AccountingViewProps {
   transactions: CashTransaction[];
   onAddTransaction: (tx: Omit<CashTransaction, 'id'>) => void;
-  onDeleteTransaction: (id: string) => void;
+  onDeleteTransaction: (id: string, alsoDeleteLinkedCurrentTx?: boolean) => void;
   currentAccounts: CurrentAccount[];
   onAddCurrentAccount: (ca: Omit<CurrentAccount, 'id' | 'createdAt' | 'updatedAt' | 'balance'> & { initialBalance?: number }) => void;
   onUpdateCurrentAccount: (id: string, updates: Partial<CurrentAccount>) => void;
   onDeleteCurrentAccount: (id: string) => void;
   currentTransactions: CurrentAccountTransaction[];
-  onAddCurrentTransaction: (ctx: Omit<CurrentAccountTransaction, 'id' | 'createdAt'>, alsoCreateCashTx?: boolean) => void;
-  onDeleteCurrentTransaction: (id: string) => void;
+  onAddCurrentTransaction: (
+    ctx: Omit<CurrentAccountTransaction, 'id' | 'createdAt'>,
+    alsoCreateCashTx?: boolean,
+    cashOptions?: { category?: string; description?: string }
+  ) => void;
+  onDeleteCurrentTransaction: (id: string, alsoDeleteLinkedCash?: boolean) => void;
   staff: StaffMember[];
   staffPayments: StaffPayment[];
   onSaveStaff: (data: StaffFormData, id?: string) => void;
@@ -146,6 +185,8 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
   const [cashTargetMethod, setCashTargetMethod] = useState<PaymentMethod>('bank_transfer');
   const [cashFilterType, setCashFilterType] = useState<'all' | 'income' | 'expense' | 'transfer'>('all');
   const [cashSearchQuery, setCashSearchQuery] = useState('');
+  const [cashCariId, setCashCariId] = useState('');               // Kasa hareketine bağlı cari
+  const [cashDate, setCashDate] = useState(getLocalDateString());
 
   // --- CARİ HESAPLAR SEKME DURUMLARI ---
   const [isCariModalOpen, setIsCariModalOpen] = useState(false);
@@ -176,6 +217,13 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
   const [movementDocNo, setMovementDocNo] = useState('');
   const [movementMethod, setMovementMethod] = useState<PaymentMethod>('cash');
   const [movementAlsoCash, setMovementAlsoCash] = useState(true);
+  const [movementDate, setMovementDate] = useState(getLocalDateString());
+
+  // Ekstre modalında her zaman GÜNCEL cari verisi kullanılır (eski kopya bakiyeyi göstermesin)
+  const activeCari = useMemo(() => {
+    if (!selectedCariForStatement) return null;
+    return currentAccounts.find(a => a.id === selectedCariForStatement.id) || selectedCariForStatement;
+  }, [selectedCariForStatement, currentAccounts]);
 
   // --- KÂR / ZARAR DÖNEM SEÇİMİ ---
   // Bugün / Bu Hafta / Bu Ay / Tüm Zamanlar + Belirli Gün / Belirli Ay / Özel Tarih Aralığı
@@ -250,20 +298,41 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
   // Şirket Net Finansal Değeri (Likidite = Kasa + Alacaklar - Borçlar)
   const totalCompanyWorth = netBalance + cariTotals.totalReceivables - cariTotals.totalPayables;
 
+  // Kasa hareketi → bağlı cari eşleşmesi (yalnızca görüntüleme amaçlı, veriye dokunmaz)
+  // 1) relatedCashTxId ile kesin bağlantı  2) Eski kayıtlar için "Cari Adı - açıklama" deseni
+  const cashCariLinks = useMemo(() => {
+    const map = new Map<string, { accountId: string; name: string; strict: boolean }>();
+    currentTransactions.forEach(ct => {
+      if (ct.relatedCashTxId) {
+        const acc = currentAccounts.find(a => a.id === ct.accountId);
+        map.set(ct.relatedCashTxId, { accountId: ct.accountId, name: acc?.name || ct.accountName, strict: true });
+      }
+    });
+    const byLongestName = [...currentAccounts].sort((a, b) => b.name.length - a.name.length);
+    transactions.forEach(t => {
+      if (map.has(t.id) || !CARI_CASH_CATEGORIES.includes(t.category)) return;
+      const acc = byLongestName.find(a => a.name && t.description.startsWith(a.name + ' - '));
+      if (acc) map.set(t.id, { accountId: acc.id, name: acc.name, strict: false });
+    });
+    return map;
+  }, [transactions, currentTransactions, currentAccounts]);
+
   // Filtrelenmiş Kasa Hareketleri
   const filteredTransactions = useMemo(() => {
     return transactions.filter(t => {
       if (cashFilterType !== 'all' && t.type !== cashFilterType) return false;
       if (cashSearchQuery.trim()) {
-        const q = cashSearchQuery.toLowerCase();
+        const q = cashSearchQuery.toLocaleLowerCase('tr-TR');
+        const cariName = cashCariLinks.get(t.id)?.name || '';
         return (
-          t.description.toLowerCase().includes(q) ||
-          t.category.toLowerCase().includes(q)
+          t.description.toLocaleLowerCase('tr-TR').includes(q) ||
+          t.category.toLocaleLowerCase('tr-TR').includes(q) ||
+          cariName.toLocaleLowerCase('tr-TR').includes(q)
         );
       }
       return true;
     });
-  }, [transactions, cashFilterType, cashSearchQuery]);
+  }, [transactions, cashFilterType, cashSearchQuery, cashCariLinks]);
 
   // Filtrelenmiş Cari Hesaplar
   const filteredCariList = useMemo(() => {
@@ -430,15 +499,32 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
   // HANDLERS
   // ==========================================
 
+  // Kasa modalını temiz bir formla aç
+  const openCashModal = () => {
+    setCashAmount('');
+    setCashDescription('');
+    setCashCariId('');
+    setCashDate(getLocalDateString());
+    setIsCashModalOpen(true);
+  };
+
   // Kasa Hareketi Ekleme Formu
   const handleCashSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const numAmount = parseFloat(cashAmount);
+    const numAmount = Math.round((parseFloat(cashAmount) || 0) * 100) / 100;
     if (!numAmount || numAmount <= 0) {
       alert('Lütfen geçerli bir tutar giriniz.');
       return;
     }
-    if (!cashDescription.trim()) {
+
+    const txDate = dateInputToIso(cashDate);
+    const linkedCari = cashType !== 'transfer' ? currentAccounts.find(a => a.id === cashCariId) : undefined;
+
+    if (cashType !== 'transfer' && CARI_CASH_CATEGORIES.includes(cashCategory) && !linkedCari) {
+      alert('Bu kategori bir cari hesaba işlenir. Lütfen listeden cari hesabı seçiniz.');
+      return;
+    }
+    if (!cashDescription.trim() && !linkedCari) {
       alert('Lütfen açıklama giriniz.');
       return;
     }
@@ -452,17 +538,35 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
         type: 'transfer',
         category: 'Hesaplar Arası Virman',
         amount: numAmount,
-        date: new Date().toISOString(),
+        date: txDate,
         description: cashDescription.trim(),
         paymentMethod: cashPaymentMethod,
         targetAccountId: cashTargetMethod,
       });
+    } else if (linkedCari) {
+      // Cariye bağlı kasa hareketi: hem kasaya hem cari ekstresine işlenir,
+      // cari bakiyesi MEVCUT bakiyenin üzerine güncellenir.
+      const ctxType = cashToCariTxType(linkedCari.type, cashType);
+      const desc = cashDescription.trim() || (cashType === 'income' ? 'Tahsilat' : 'Ödeme');
+      onAddCurrentTransaction(
+        {
+          accountId: linkedCari.id,
+          accountName: linkedCari.name,
+          type: ctxType,
+          amount: numAmount,
+          date: txDate,
+          description: desc,
+          paymentMethod: cashPaymentMethod,
+        },
+        true,
+        { category: cashCategory, description: `${linkedCari.name} - ${desc}` }
+      );
     } else {
       onAddTransaction({
         type: cashType,
         category: cashCategory,
         amount: numAmount,
-        date: new Date().toISOString(),
+        date: txDate,
         description: cashDescription.trim(),
         paymentMethod: cashPaymentMethod,
       });
@@ -471,6 +575,21 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
     setIsCashModalOpen(false);
     setCashAmount('');
     setCashDescription('');
+    setCashCariId('');
+  };
+
+  // Kasa hareketini sil (bağlı cari hareketi varsa kullanıcıya sorulur)
+  const handleDeleteCashTx = (tx: CashTransaction) => {
+    if (!confirm('Bu kasa hareketini silmek istediğinize emin misiniz?')) return;
+    const link = cashCariLinks.get(tx.id);
+    let alsoCari = false;
+    if (link?.strict) {
+      alsoCari = confirm(
+        `Bu kasa hareketi "${link.name}" carisine de işlenmişti.\n\n` +
+        `Tamam: Cari hareketi de sil (cari bakiyesi geri alınır)\nİptal: Sadece kasa kaydını sil, cari ekstresi kalsın`
+      );
+    }
+    onDeleteTransaction(tx.id, alsoCari);
   };
 
   // Cari Kart Kaydetme / Güncelleme
@@ -556,37 +675,31 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
     setIsCariModalOpen(true);
   };
 
-  // Cari Hareket Ekleme (Ekstre Modalı İçinden)
+  // Cari Hareket Ekleme (Ekstre Modalı İçinden) – mevcut bakiyenin üzerine işlenir
   const handleAddMovementSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedCariForStatement) return;
+    if (!activeCari) return;
 
-    const amt = parseFloat(movementAmount);
+    const amt = Math.round((parseFloat(movementAmount) || 0) * 100) / 100;
     if (!amt || amt <= 0) {
       alert('Lütfen geçerli bir tutar giriniz.');
       return;
     }
-    if (!movementDescription.trim()) {
-      alert('Lütfen açıklama giriniz.');
-      return;
-    }
+    const isSupplier = activeCari.type === 'supplier';
+    const defaultDesc = movementType === 'credit'
+      ? (isSupplier ? 'Toptancıya ödeme' : 'Tahsilat')
+      : (isSupplier ? 'Mal / parça alımı' : 'Servis / satış bedeli');
 
     onAddCurrentTransaction({
-      accountId: selectedCariForStatement.id,
-      accountName: selectedCariForStatement.name,
+      accountId: activeCari.id,
+      accountName: activeCari.name,
       type: movementType,
       amount: amt,
-      date: new Date().toISOString(),
-      description: movementDescription.trim(),
+      date: dateInputToIso(movementDate),
+      description: movementDescription.trim() || defaultDesc,
       documentNo: movementDocNo.trim() || undefined,
       paymentMethod: movementMethod,
     }, movementAlsoCash);
-
-    // Güncel cari verisini tazele
-    const refreshed = currentAccounts.find(a => a.id === selectedCariForStatement.id);
-    if (refreshed) {
-      setSelectedCariForStatement(refreshed);
-    }
 
     setIsAddMovementOpen(false);
     setMovementAmount('');
@@ -594,18 +707,73 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
     setMovementDocNo('');
   };
 
+  // Ekstrede yeni hareket formunu belirli bir türle aç
+  const openMovementForm = (type: 'debit' | 'credit') => {
+    setMovementType(type);
+    // Veresiye (borç) hareketleri kasaya para girişi/çıkışı değildir
+    setMovementAlsoCash(type === 'credit');
+    setMovementAmount('');
+    setMovementDescription('');
+    setMovementDocNo('');
+    setMovementDate(getLocalDateString());
+    setIsAddMovementOpen(true);
+  };
+
+  const openStatement = (ca: CurrentAccount, quickType?: 'debit' | 'credit') => {
+    setSelectedCariForStatement(ca);
+    if (quickType) openMovementForm(quickType);
+    else setIsAddMovementOpen(false);
+  };
+
+  const closeStatement = () => {
+    setSelectedCariForStatement(null);
+    setIsAddMovementOpen(false);
+  };
+
+  // Cari hareketi sil (kasaya da işlenmişse kullanıcıya sorulur)
+  const handleDeleteMovement = (m: CurrentAccountTransaction) => {
+    if (!confirm(`"${m.description}" hareketini silmek istediğinize emin misiniz?\nCari bakiyesi yalnızca bu hareketin tutarı kadar geri alınır.`)) return;
+    let alsoCash = false;
+    if (m.relatedCashTxId && transactions.some(t => t.id === m.relatedCashTxId)) {
+      alsoCash = confirm(
+        'Bu hareket kasaya da işlenmişti.\n\n' +
+        'Tamam: Bağlı kasa kaydını da sil\nİptal: Kasa kaydı kalsın'
+      );
+    }
+    onDeleteCurrentTransaction(m.id, alsoCash);
+  };
+
   // Cari Ekstre Yazdırma
   const handlePrintLedger = () => {
     window.print();
   };
 
-  // Seçili Carinin Hareketleri
-  const currentAccountMovements = useMemo(() => {
-    if (!selectedCariForStatement) return [];
-    return currentTransactions
-      .filter(t => t.accountId === selectedCariForStatement.id)
-      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-  }, [currentTransactions, selectedCariForStatement]);
+  // Seçili carinin hareketleri + yürüyen bakiye.
+  // Kayıtlı hareketlerin toplamı cari bakiyesini açıklamıyorsa aradaki fark
+  // "önceki devir" olarak gösterilir (veritabanına hiçbir şey yazılmaz).
+  const ledger = useMemo(() => {
+    const empty = { rows: [] as { m: CurrentAccountTransaction; running: number }[], movements: [] as CurrentAccountTransaction[], openingOffset: 0, debitTotal: 0, creditTotal: 0 };
+    if (!activeCari) return empty;
+    const movements = currentTransactions
+      .filter(t => t.accountId === activeCari.id)
+      .sort((a, b) =>
+        (new Date(a.date).getTime() - new Date(b.date).getTime()) ||
+        String(a.createdAt || '').localeCompare(String(b.createdAt || ''))
+      );
+    const sumEffects = movements.reduce((s, t) => s + cariTxEffect(activeCari.type, t.type, Number(t.amount) || 0), 0);
+    const rawOffset = Math.round(((Number(activeCari.balance) || 0) - sumEffects) * 100) / 100;
+    const openingOffset = Math.abs(rawOffset) < 0.01 ? 0 : rawOffset;
+    let running = openingOffset;
+    let debitTotal = 0;
+    let creditTotal = 0;
+    const rows = movements.map(m => {
+      const amt = Number(m.amount) || 0;
+      running = Math.round((running + cariTxEffect(activeCari.type, m.type, amt)) * 100) / 100;
+      if (m.type === 'debit') debitTotal += amt; else creditTotal += amt;
+      return { m, running };
+    });
+    return { rows, movements, openingOffset, debitTotal, creditTotal };
+  }, [currentTransactions, activeCari]);
 
   return (
     <div>
@@ -628,7 +796,7 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
                 <FileSpreadsheet size={18} />
                 <span>Excel'e Aktar</span>
               </button>
-              <button className="btn btn-primary" onClick={() => setIsCashModalOpen(true)}>
+              <button id="cash-add-btn" className="btn btn-primary" onClick={openCashModal}>
                 <Plus size={18} />
                 <span>Yeni Kasa Hareketi Ekle</span>
               </button>
@@ -858,7 +1026,29 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
                         <td>
                           <strong>{tx.category}</strong>
                         </td>
-                        <td style={{ maxWidth: '320px' }}>{tx.description}</td>
+                        <td style={{ maxWidth: '320px' }}>
+                          {tx.description}
+                          {(() => {
+                            const link = cashCariLinks.get(tx.id);
+                            if (!link) return null;
+                            const acc = currentAccounts.find(a => a.id === link.accountId);
+                            return (
+                              <div>
+                                <button
+                                  type="button"
+                                  className="cari-link-chip"
+                                  onClick={() => acc && openStatement(acc)}
+                                  disabled={!acc}
+                                  title={acc ? 'Cari ekstresini aç' : 'Cari kartı bulunamadı'}
+                                >
+                                  <Users size={11} />
+                                  <span>{link.name}</span>
+                                  {acc && <ExternalLink size={10} />}
+                                </button>
+                              </div>
+                            );
+                          })()}
+                        </td>
                         <td style={{ fontSize: '0.82rem', color: 'var(--text-dim)' }}>
                           {formatDate(tx.date)}
                         </td>
@@ -882,11 +1072,7 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
                           <button 
                             className="btn btn-danger btn-sm"
                             style={{ padding: '4px 8px' }}
-                            onClick={() => {
-                              if (confirm('Bu kasa hareketini silmek istediğinize emin misiniz?')) {
-                                onDeleteTransaction(tx.id);
-                              }
-                            }}
+                            onClick={() => handleDeleteCashTx(tx)}
                             title="Hareketi Sil"
                           >
                             <Trash2 size={13} />
@@ -1058,11 +1244,22 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
                             <button
                               className="btn btn-secondary btn-sm"
                               style={{ padding: '6px 10px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                              onClick={() => setSelectedCariForStatement(ca)}
+                              onClick={() => openStatement(ca)}
                               title="Cari Ekstre ve Hareketleri İncele"
                             >
                               <FileText size={14} />
                               <span>Ekstre</span>
+                            </button>
+
+                            <button
+                              id={`cari-quick-pay-${ca.id}`}
+                              className="btn btn-primary btn-sm"
+                              style={{ padding: '6px 10px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                              onClick={() => openStatement(ca, 'credit')}
+                              title={isSupplier ? 'Mevcut borcun üzerine ödeme işle' : 'Mevcut alacağın üzerine tahsilat işle'}
+                            >
+                              <HandCoins size={14} />
+                              <span>{isSupplier ? 'Ödeme' : 'Tahsilat'}</span>
                             </button>
 
                             <a
@@ -1539,7 +1736,7 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
                     }}
                     onClick={() => {
                       setCashType('income');
-                      setCashCategory('Servis Tahsilatı');
+                      setCashCategory(cashCariId ? 'Müşteri Cari Tahsilat' : 'Servis Tahsilatı');
                     }}
                   >
                     + Gelir
@@ -1559,7 +1756,7 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
                     }}
                     onClick={() => {
                       setCashType('expense');
-                      setCashCategory('Yedek Parça Alımı');
+                      setCashCategory(cashCariId ? 'Toptancı Cari Ödeme' : 'Yedek Parça Alımı');
                     }}
                   >
                     - Gider
@@ -1648,24 +1845,108 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
                   </div>
                 )}
 
+                {cashType !== 'transfer' && (() => {
+                  const isCariCategory = CARI_CASH_CATEGORIES.includes(cashCategory);
+                  const selCari = currentAccounts.find(a => a.id === cashCariId);
+                  return (
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                      <label className="form-label" htmlFor="cash-cari-picker">
+                        Cari Hesap {isCariCategory
+                          ? <span style={{ color: '#ef4444' }}>* (zorunlu)</span>
+                          : <span style={{ color: 'var(--text-dim)', fontWeight: 400 }}>(isteğe bağlı – seçilirse cari bakiyesine de işlenir)</span>}
+                      </label>
+                      <CariPicker
+                        id="cash-cari-picker"
+                        accounts={currentAccounts}
+                        value={cashCariId}
+                        preferType={cashType === 'income' ? 'customer' : 'supplier'}
+                        required={isCariCategory}
+                        onChange={id => {
+                          setCashCariId(id);
+                          // Cari seçilince kategoriyi otomatik cari kategorisine al
+                          if (id && !CARI_CASH_CATEGORIES.includes(cashCategory)) {
+                            setCashCategory(cashType === 'income' ? 'Müşteri Cari Tahsilat' : 'Toptancı Cari Ödeme');
+                          }
+                        }}
+                      />
+                      {selCari && (
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: '6px' }}>
+                          {cashType === 'income'
+                            ? (selCari.type === 'supplier' ? 'Toptancıdan para geldi (iade): borcumuz artar / alacağımız azalır.' : 'Müşteriden tahsilat: alacağımız azalır.')
+                            : (selCari.type === 'supplier' ? 'Toptancıya ödeme: borcumuz azalır.' : 'Müşteriye para verildi (iade): alacağımız artar / borcumuz azalır.')}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
                 <div className="form-group" style={{ marginBottom: 0 }}>
                   <label className="form-label">Tutar (TL) *</label>
                   <input 
+                    id="cash-amount"
                     type="number" 
                     required 
-                    min={1} 
+                    min={0.01}
+                    step="0.01"
                     className="form-control" 
                     placeholder="Örn: 1500"
                     value={cashAmount}
                     onChange={e => setCashAmount(e.target.value)}
                   />
+                  {(() => {
+                    const selCari = cashType !== 'transfer' ? currentAccounts.find(a => a.id === cashCariId) : undefined;
+                    if (!selCari) return null;
+                    const closing = closingAmountFor(selCari, cashToCariTxType(selCari.type, cashType as 'income' | 'expense'));
+                    return closing > 0 ? (
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        style={{ marginTop: '6px', fontSize: '0.75rem', padding: '3px 8px' }}
+                        onClick={() => setCashAmount(String(closing))}
+                      >
+                        Bakiyenin tamamı: {formatCurrency(closing)}
+                      </button>
+                    ) : null;
+                  })()}
                 </div>
 
+                {/* Cari seçiliyse: mevcut bakiye → işlem sonrası bakiye */}
+                {(() => {
+                  const selCari = cashType !== 'transfer' ? currentAccounts.find(a => a.id === cashCariId) : undefined;
+                  if (!selCari) return null;
+                  const amt = parseFloat(cashAmount) || 0;
+                  const delta = cariTxEffect(selCari.type, cashToCariTxType(selCari.type, cashType as 'income' | 'expense'), amt);
+                  const next = Math.round((selCari.balance + delta) * 100) / 100;
+                  const cur = balanceLabel(selCari.balance);
+                  const nxt = balanceLabel(next);
+                  return (
+                    <div className="balance-preview">
+                      <div className="balance-preview-cell">
+                        <span>Mevcut Cari Bakiye</span>
+                        <strong style={{ color: cur.color }}>{formatCurrency(Math.abs(selCari.balance))}</strong>
+                        <small style={{ color: cur.color }}>{selCari.balance > 0 ? 'Alacağımız' : selCari.balance < 0 ? 'Borcumuz' : 'Kapalı'}</small>
+                      </div>
+                      <div className="balance-preview-delta">
+                        <ChevronRight size={18} />
+                        <span style={{ color: delta >= 0 ? '#10b981' : '#ef4444' }}>
+                          {amt > 0 ? `${delta >= 0 ? '+' : '-'}${formatCurrency(Math.abs(delta))}` : '—'}
+                        </span>
+                      </div>
+                      <div className="balance-preview-cell is-next">
+                        <span>İşlem Sonrası</span>
+                        <strong style={{ color: nxt.color }}>{formatCurrency(Math.abs(next))}</strong>
+                        <small style={{ color: nxt.color }}>{next > 0 ? 'Alacağımız' : next < 0 ? 'Borcumuz' : 'Hesap kapanır'}</small>
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Açıklama *</label>
+                  <label className="form-label">Açıklama {cashType !== 'transfer' && cashCariId ? <span style={{ color: 'var(--text-dim)', fontWeight: 400 }}>(boş bırakılırsa "{cashType === 'income' ? 'Tahsilat' : 'Ödeme'}")</span> : '*'}</label>
                   <input 
+                    id="cash-description"
                     type="text" 
-                    required 
+                    required={!(cashType !== 'transfer' && cashCariId)}
                     className="form-control" 
                     placeholder={cashType === 'transfer' ? 'Örn: Dükkan nakit kasasından Ziraat Bankası hesabına yatırıldı' : 'Örn: Ege toptancıdan 5 adet pompa alımı'}
                     value={cashDescription}
@@ -1687,6 +1968,18 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
                     </select>
                   </div>
                 )}
+
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">İşlem Tarihi</label>
+                  <input
+                    id="cash-date"
+                    type="date"
+                    className="form-control"
+                    value={cashDate}
+                    max={getLocalDateString()}
+                    onChange={e => setCashDate(e.target.value)}
+                  />
+                </div>
               </div>
 
               <div className="modal-footer">
@@ -1815,6 +2108,29 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
                   />
                 </div>
 
+                {cariToEdit && (() => {
+                  const live = currentAccounts.find(a => a.id === cariToEdit.id) || cariToEdit;
+                  const bl = balanceLabel(live.balance);
+                  return (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap', background: 'var(--surface-color)', padding: '12px', borderRadius: 'var(--radius-sm)', border: '1px dashed var(--border-hover)' }}>
+                      <div>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Güncel Bakiye (korunur)</div>
+                        <div style={{ fontWeight: 800, fontSize: '1.1rem', color: bl.color }}>{bl.text}</div>
+                        <div style={{ fontSize: '0.74rem', color: 'var(--text-dim)' }}>Kart bilgilerini düzenlemek bakiyeyi değiştirmez.</div>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => { setIsCariModalOpen(false); openStatement(live, 'debit'); }}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                      >
+                        <Plus size={14} />
+                        <span>Bakiyeye Hareket Ekle</span>
+                      </button>
+                    </div>
+                  );
+                })()}
+
                 {!cariToEdit && (
                   <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '12px', background: 'var(--surface-color)', padding: '12px', borderRadius: 'var(--radius-sm)' }}>
                     <div className="form-group" style={{ marginBottom: 0 }}>
@@ -1886,15 +2202,15 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
       {/* ======================================================== */}
       {/* MODAL 3: CARİ EKSTRE & HESAP DÖKÜMÜ MODALI (DETAY)       */}
       {/* ======================================================== */}
-      {selectedCariForStatement && (
-        <div className="modal-overlay" onClick={() => setSelectedCariForStatement(null)}>
-          <div className="modal-box" onClick={e => e.stopPropagation()} style={{ maxWidth: '850px', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
+      {activeCari && (
+        <div className="modal-overlay" onClick={closeStatement}>
+          <div className="modal-box" onClick={e => e.stopPropagation()} style={{ maxWidth: '920px', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
             {/* Modal Header */}
             <div className="modal-header no-print">
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <Building size={22} style={{ color: 'var(--primary)' }} />
                 <div>
-                  <h3 style={{ margin: 0 }}>{selectedCariForStatement.name}</h3>
+                  <h3 style={{ margin: 0 }}>{activeCari.name}</h3>
                   <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>
                     Cari Hesap Ekstresi & Hareket Dökümü
                   </span>
@@ -1903,8 +2219,8 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <a
                   href={generateCurrentAccountWhatsAppLink(
-                    selectedCariForStatement,
-                    currentAccountMovements,
+                    activeCari,
+                    ledger.movements,
                     shopName,
                     shopPhone
                   )}
@@ -1922,7 +2238,7 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
                   <span>Yazdır</span>
                 </button>
 
-                <button className="close-btn" onClick={() => setSelectedCariForStatement(null)}>
+                <button className="close-btn" onClick={closeStatement}>
                   <X size={20} />
                 </button>
               </div>
@@ -1935,20 +2251,20 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
                 <div>
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>CARİ TÜRÜ</div>
                   <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>
-                    {selectedCariForStatement.type === 'supplier' ? '🏢 Toptancı / Yedek Parçacı' : '👤 Açık Hesap Müşteri'}
+                    {activeCari.type === 'supplier' ? '🏢 Toptancı / Yedek Parçacı' : activeCari.type === 'other' ? '📌 Diğer / Kurumsal' : '👤 Açık Hesap Müşteri'}
                   </div>
-                  {selectedCariForStatement.authorizedPerson && (
+                  {activeCari.authorizedPerson && (
                     <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>
-                      Yetkili: {selectedCariForStatement.authorizedPerson}
+                      Yetkili: {activeCari.authorizedPerson}
                     </div>
                   )}
                 </div>
 
                 <div>
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>İLETİŞİM</div>
-                  <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>{selectedCariForStatement.phone}</div>
+                  <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>{activeCari.phone}</div>
                   <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>
-                    {selectedCariForStatement.district ? `${selectedCariForStatement.district} / ${selectedCariForStatement.city}` : selectedCariForStatement.city}
+                    {activeCari.district ? `${activeCari.district} / ${activeCari.city}` : activeCari.city}
                   </div>
                 </div>
 
@@ -1958,28 +2274,47 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
                     style={{ 
                       fontSize: '1.35rem', 
                       fontWeight: 800, 
-                      color: selectedCariForStatement.balance > 0 ? '#10b981' : selectedCariForStatement.balance < 0 ? '#ef4444' : 'var(--text-main)' 
+                      color: activeCari.balance > 0 ? '#10b981' : activeCari.balance < 0 ? '#ef4444' : 'var(--text-main)' 
                     }}
                   >
-                    {formatCurrency(Math.abs(selectedCariForStatement.balance))}
+                    {formatCurrency(Math.abs(activeCari.balance))}
                   </div>
-                  <div style={{ fontSize: '0.75rem', fontWeight: 600, color: selectedCariForStatement.balance > 0 ? '#10b981' : selectedCariForStatement.balance < 0 ? '#ef4444' : 'var(--text-dim)' }}>
-                    {selectedCariForStatement.balance > 0 ? '🟢 Firmamız Alacaklı' : selectedCariForStatement.balance < 0 ? '🔴 Firmamız Borçlu' : '⚪ Hesap Kapalı (0 TL)'}
+                  <div style={{ fontSize: '0.75rem', fontWeight: 600, color: activeCari.balance > 0 ? '#10b981' : activeCari.balance < 0 ? '#ef4444' : 'var(--text-dim)' }}>
+                    {activeCari.balance > 0 ? '🟢 Firmamız Alacaklı' : activeCari.balance < 0 ? '🔴 Firmamız Borçlu' : '⚪ Hesap Kapalı (0 TL)'}
                   </div>
                 </div>
               </div>
 
               {/* Hızlı İşlem Ekleme Çubuğu */}
-              <div className="no-print" style={{ marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div className="no-print" style={{ marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                 <h4 style={{ margin: 0, fontSize: '1rem' }}>Hesap Hareketleri & Ekstre</h4>
-                <button 
-                  className="btn btn-primary btn-sm"
-                  onClick={() => setIsAddMovementOpen(!isAddMovementOpen)}
-                  style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
-                >
-                  <Plus size={16} />
-                  <span>{isAddMovementOpen ? 'Formu Kapat' : 'Yeni Hareket / Ödeme Ekle'}</span>
-                </button>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <button
+                    id="cari-add-debit-btn"
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => openMovementForm('debit')}
+                    style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#ef4444' }}
+                  >
+                    <Plus size={15} />
+                    <span>{activeCari.type === 'supplier' ? 'Mal / Parça Alımı (Borç)' : 'Servis / Satış (Borçlandır)'}</span>
+                  </button>
+                  <button
+                    id="cari-add-credit-btn"
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    onClick={() => openMovementForm('credit')}
+                    style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                  >
+                    <HandCoins size={15} />
+                    <span>{activeCari.type === 'supplier' ? 'Ödeme Yap' : 'Tahsilat Al'}</span>
+                  </button>
+                  {isAddMovementOpen && (
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => setIsAddMovementOpen(false)} title="Formu Kapat">
+                      <X size={15} />
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* Yeni Hareket Ekleme Formu */}
@@ -1987,22 +2322,30 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
                 <form 
                   onSubmit={handleAddMovementSubmit} 
                   className="no-print"
-                  style={{ background: 'var(--surface-color)', border: '1px solid var(--primary-light)', padding: '16px', borderRadius: 'var(--radius-sm)', marginBottom: '20px' }}
+                  style={{ background: 'var(--surface-color)', border: '1px solid var(--primary-light)', padding: '16px', borderRadius: 'var(--radius-sm)', marginBottom: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}
                 >
-                  <h5 style={{ margin: '0 0 12px 0', fontSize: '0.9rem', color: 'var(--primary)' }}>Yeni Cari Hareket / Ödeme Girişi</h5>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px', marginBottom: '12px' }}>
+                  <h5 style={{ margin: 0, fontSize: '0.9rem', color: 'var(--primary)' }}>
+                    Yeni Cari Hareket – mevcut bakiyenin üzerine işlenir
+                  </h5>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px' }}>
                     <div className="form-group" style={{ marginBottom: 0 }}>
                       <label className="form-label">İşlem Türü</label>
                       <select 
+                        id="cari-movement-type"
                         className="form-control"
                         value={movementType}
-                        onChange={e => setMovementType(e.target.value as 'debit' | 'credit')}
+                        onChange={e => {
+                          const t = e.target.value as 'debit' | 'credit';
+                          setMovementType(t);
+                          // Veresiye (borç) hareketleri kasaya para girişi/çıkışı değildir
+                          setMovementAlsoCash(t === 'credit');
+                        }}
                       >
                         <option value="debit">
-                          {selectedCariForStatement.type === 'supplier' ? '📦 Mal / Parça Alındı (Borcumuz Arttı)' : '🔧 Servis Bedeli / Mal Verildi'}
+                          {activeCari.type === 'supplier' ? '📦 Mal / Parça Alındı (Borcumuz Artar)' : '🔧 Servis Bedeli / Mal Verildi (Alacağımız Artar)'}
                         </option>
                         <option value="credit">
-                          {selectedCariForStatement.type === 'supplier' ? '💰 Toptancıya Ödeme Yapıldı' : '💵 Müşteriden Tahsilat Alındı'}
+                          {activeCari.type === 'supplier' ? '💰 Toptancıya Ödeme Yapıldı (Borcumuz Azalır)' : '💵 Müşteriden Tahsilat Alındı (Alacağımız Azalır)'}
                         </option>
                       </select>
                     </div>
@@ -2010,13 +2353,41 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
                     <div className="form-group" style={{ marginBottom: 0 }}>
                       <label className="form-label">Tutar (TL) *</label>
                       <input 
+                        id="cari-movement-amount"
                         type="number" 
                         required 
-                        min={1} 
+                        min={0.01}
+                        step="0.01"
                         className="form-control" 
                         placeholder="Örn: 1250"
                         value={movementAmount}
                         onChange={e => setMovementAmount(e.target.value)}
+                        autoFocus
+                      />
+                      {(() => {
+                        const closing = closingAmountFor(activeCari, movementType);
+                        return closing > 0 ? (
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            style={{ marginTop: '6px', fontSize: '0.75rem', padding: '3px 8px' }}
+                            onClick={() => setMovementAmount(String(closing))}
+                          >
+                            Bakiyenin tamamı: {formatCurrency(closing)}
+                          </button>
+                        ) : null;
+                      })()}
+                    </div>
+
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                      <label className="form-label">İşlem Tarihi</label>
+                      <input
+                        id="cari-movement-date"
+                        type="date"
+                        className="form-control"
+                        value={movementDate}
+                        max={getLocalDateString()}
+                        onChange={e => setMovementDate(e.target.value)}
                       />
                     </div>
 
@@ -2045,26 +2416,62 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
                     </div>
                   </div>
 
-                  <div className="form-group" style={{ marginBottom: '12px' }}>
-                    <label className="form-label">Açıklama *</label>
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label">Açıklama</label>
                     <input 
+                      id="cari-movement-description"
                       type="text" 
-                      required 
                       className="form-control" 
-                      placeholder="Örn: 2 adet buzdolabı motoru alımı veya banka ara ödemesi"
+                      placeholder={movementType === 'debit'
+                        ? (activeCari.type === 'supplier' ? 'Örn: 2 adet buzdolabı motoru alımı' : 'Örn: Çamaşır makinesi pompa değişimi')
+                        : (activeCari.type === 'supplier' ? 'Örn: Ara ödeme' : 'Örn: Elden tahsilat')}
                       value={movementDescription}
                       onChange={e => setMovementDescription(e.target.value)}
                     />
                   </div>
 
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  {/* Eski bakiye → Yeni bakiye önizlemesi */}
+                  {(() => {
+                    const amt = parseFloat(movementAmount) || 0;
+                    const delta = cariTxEffect(activeCari.type, movementType, amt);
+                    const next = Math.round((activeCari.balance + delta) * 100) / 100;
+                    const cur = balanceLabel(activeCari.balance);
+                    const nxt = balanceLabel(next);
+                    return (
+                      <div className="balance-preview">
+                        <div className="balance-preview-cell">
+                          <span>Mevcut Bakiye</span>
+                          <strong style={{ color: cur.color }}>{formatCurrency(Math.abs(activeCari.balance))}</strong>
+                          <small style={{ color: cur.color }}>{activeCari.balance > 0 ? 'Alacağımız' : activeCari.balance < 0 ? 'Borcumuz' : 'Kapalı'}</small>
+                        </div>
+                        <div className="balance-preview-delta">
+                          <ChevronRight size={18} />
+                          <span style={{ color: delta >= 0 ? '#10b981' : '#ef4444' }}>
+                            {amt > 0 ? `${delta >= 0 ? '+' : '-'}${formatCurrency(Math.abs(delta))}` : '—'}
+                          </span>
+                        </div>
+                        <div className="balance-preview-cell is-next">
+                          <span>İşlem Sonrası</span>
+                          <strong style={{ color: nxt.color }}>{formatCurrency(Math.abs(next))}</strong>
+                          <small style={{ color: nxt.color }}>{next > 0 ? 'Alacağımız' : next < 0 ? 'Borcumuz' : 'Hesap kapanır'}</small>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                     <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.85rem' }}>
                       <input 
+                        id="cari-movement-also-cash"
                         type="checkbox" 
                         checked={movementAlsoCash} 
                         onChange={e => setMovementAlsoCash(e.target.checked)} 
                       />
-                      <span>Bu hareketi Kasa/Muhasebe tablosuna da otomatik gelir/gider olarak işle</span>
+                      <span>
+                        {movementType === 'credit'
+                          ? `Kasaya da ${activeCari.type === 'supplier' ? 'gider (ödeme)' : 'gelir (tahsilat)'} olarak işle`
+                          : 'Kasaya da işle (veresiye işlemlerde genelde işaretlenmez)'}
+                      </span>
                     </label>
 
                     <button type="submit" className="btn btn-primary btn-sm">
@@ -2086,24 +2493,46 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
                       <th>İşlem Türü</th>
                       <th style={{ textAlign: 'right' }}>Borç (TL)</th>
                       <th style={{ textAlign: 'right' }}>Alacak (TL)</th>
+                      <th style={{ textAlign: 'right' }}>Bakiye</th>
                       <th style={{ textAlign: 'right' }} className="no-print">Sil</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {currentAccountMovements.length === 0 ? (
+                    {ledger.openingOffset !== 0 && (
+                      <tr className="ledger-devir-row">
+                        <td style={{ whiteSpace: 'nowrap' }}>—</td>
+                        <td>DEVİR</td>
+                        <td colSpan={4} style={{ color: 'var(--text-muted)' }}>
+                          Önceki devir bakiyesi (hareket kaydı bulunmayan eski bakiye – korunmaktadır)
+                        </td>
+                        <td style={{ textAlign: 'right', fontWeight: 700, color: ledger.openingOffset > 0 ? '#10b981' : '#ef4444', whiteSpace: 'nowrap' }}>
+                          {formatCurrency(Math.abs(ledger.openingOffset))} {ledger.openingOffset > 0 ? '(A)' : '(B)'}
+                        </td>
+                        <td className="no-print"></td>
+                      </tr>
+                    )}
+                    {ledger.rows.length === 0 && ledger.openingOffset === 0 ? (
                       <tr>
-                        <td colSpan={7} style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>
+                        <td colSpan={8} style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>
                           Bu cari hesaba ait henüz işlem hareketi kaydedilmemiş.
                         </td>
                       </tr>
                     ) : (
-                      currentAccountMovements.map(m => {
+                      ledger.rows.map(({ m, running }) => {
                         const isDebit = m.type === 'debit';
+                        const linkedCash = m.relatedCashTxId ? transactions.some(t => t.id === m.relatedCashTxId) : false;
                         return (
                           <tr key={m.id}>
                             <td style={{ whiteSpace: 'nowrap' }}>{formatDate(m.date)}</td>
                             <td>{m.documentNo || '-'}</td>
-                            <td style={{ maxWidth: '240px' }}>{m.description}</td>
+                            <td style={{ maxWidth: '240px' }}>
+                              {m.description}
+                              {linkedCash && (
+                                <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                  <Wallet size={10} /> Kasaya işlendi ({paymentMethodLabel(m.paymentMethod)})
+                                </div>
+                              )}
+                            </td>
                             <td>
                               <span 
                                 className="badge"
@@ -2122,20 +2551,14 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
                             <td style={{ textAlign: 'right', fontWeight: 600, color: !isDebit ? '#10b981' : 'inherit' }}>
                               {!isDebit ? formatCurrency(m.amount) : '-'}
                             </td>
+                            <td style={{ textAlign: 'right', fontWeight: 700, whiteSpace: 'nowrap', color: running > 0 ? '#10b981' : running < 0 ? '#ef4444' : 'var(--text-dim)' }}>
+                              {formatCurrency(Math.abs(running))} {running > 0 ? '(A)' : running < 0 ? '(B)' : ''}
+                            </td>
                             <td style={{ textAlign: 'right' }} className="no-print">
                               <button
                                 className="btn btn-danger btn-sm"
                                 style={{ padding: '3px 6px' }}
-                                onClick={() => {
-                                  if (confirm('Bu cari hareketi silmek istediğinize emin misiniz?')) {
-                                    onDeleteCurrentTransaction(m.id);
-                                    // Güncel veriyi yenile
-                                    setTimeout(() => {
-                                      const refreshed = currentAccounts.find(a => a.id === selectedCariForStatement.id);
-                                      if (refreshed) setSelectedCariForStatement(refreshed);
-                                    }, 100);
-                                  }
-                                }}
+                                onClick={() => handleDeleteMovement(m)}
                                 title="Hareketi Sil"
                               >
                                 <Trash2 size={12} />
@@ -2146,13 +2569,29 @@ export const AccountingView: React.FC<AccountingViewProps> = ({
                       })
                     )}
                   </tbody>
+                  {(ledger.rows.length > 0 || ledger.openingOffset !== 0) && (
+                    <tfoot>
+                      <tr style={{ fontWeight: 800 }}>
+                        <td colSpan={4} style={{ textAlign: 'right' }}>TOPLAM</td>
+                        <td style={{ textAlign: 'right', color: '#ef4444' }}>{formatCurrency(ledger.debitTotal)}</td>
+                        <td style={{ textAlign: 'right', color: '#10b981' }}>{formatCurrency(ledger.creditTotal)}</td>
+                        <td style={{ textAlign: 'right', whiteSpace: 'nowrap', color: activeCari.balance > 0 ? '#10b981' : activeCari.balance < 0 ? '#ef4444' : 'var(--text-dim)' }}>
+                          {formatCurrency(Math.abs(activeCari.balance))} {activeCari.balance > 0 ? '(A)' : activeCari.balance < 0 ? '(B)' : ''}
+                        </td>
+                        <td className="no-print"></td>
+                      </tr>
+                    </tfoot>
+                  )}
                 </table>
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', marginTop: '6px' }}>
+                  (A) = Firmamız alacaklı &nbsp;•&nbsp; (B) = Firmamız borçlu
+                </div>
               </div>
             </div>
 
             {/* Modal Footer */}
             <div className="modal-footer no-print">
-              <button className="btn btn-secondary" onClick={() => setSelectedCariForStatement(null)}>
+              <button className="btn btn-secondary" onClick={closeStatement}>
                 Kapat
               </button>
             </div>
